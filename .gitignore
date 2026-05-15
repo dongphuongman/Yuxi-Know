@@ -51,6 +51,7 @@ cache
 .cursor
 .trae
 .codex
+.sisyphus
 .pytest_cache
 
 *.secret*
