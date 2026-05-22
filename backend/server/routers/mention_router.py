@@ -35,8 +35,19 @@ async def search_mention_files(
     # NOTE: 校验 thread 归属权，防止恶意用户传入他人 thread_id 遍历文件
     conv_repo = ConversationRepository(db)
     conversation = await conv_repo.get_conversation_by_thread_id(thread_id)
-    if not conversation or conversation.user_id != user_id or conversation.status == "deleted":
-        raise HTTPException(status_code=404, detail="对话线程不存在")
+    if conversation:
+        if conversation.user_id != user_id or conversation.status == "deleted":
+            raise HTTPException(status_code=404, detail="对话线程不存在")
+    else:
+        # NOTE: 如果是尚未在数据库记录的全新对话（还未发送首条消息），在格式校验安全的前提下放行。
+        # 此时该 thread 专属的 uploads/outputs 目录还没创建或为空，
+        # 用户仅能安全地搜索到自己全局的工作区 (workspace) 文件。
+        try:
+            from yuxi.agents.backends.sandbox.paths import _validate_thread_id
+
+            _validate_thread_id(thread_id)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="非法的 thread_id 格式")
 
     return await search_mention_files_in_index(
         thread_id=thread_id,
