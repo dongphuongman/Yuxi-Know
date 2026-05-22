@@ -425,8 +425,9 @@ const updateMentionItems = (query = '') => {
     subagents: filterItems(subagentItems)
   }
 
-  // 如果有关键字，且已绑定会话，则触发后端高性能搜索进行补充
-  if (query && props.threadId) {
+  // NOTE: 如果是尚未开始对话的全新会话，此时 threadId 为空，允许使用临时占位 ID 检索用户全局的工作区文件
+  if (query) {
+    const activeThreadId = props.threadId || 'new_thread_placeholder'
     clearTimeout(mentionSearchTimer)
     mentionSearchTimer = setTimeout(async () => {
       // 物理中断之前的未完成 HTTP 请求
@@ -440,7 +441,7 @@ const updateMentionItems = (query = '') => {
 
       try {
         const responseData = await searchMentionFiles(
-          props.threadId,
+          activeThreadId,
           query,
           activeAbortController.signal
         )
