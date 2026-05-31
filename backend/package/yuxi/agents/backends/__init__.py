@@ -1,6 +1,6 @@
 from deepagents.backends import CompositeBackend, StateBackend
 
-from .composite import create_agent_composite_backend
+from .composite import create_agent_composite_backend, create_agent_filesystem_middleware
 from .knowledge_base_backend import resolve_visible_knowledge_bases_for_context
 from .sandbox import (
     SKILLS_PATH,
@@ -27,6 +27,7 @@ __all__ = [
     "StateBackend",
     "SelectedSkillsReadonlyBackend",
     "create_agent_composite_backend",
+    "create_agent_filesystem_middleware",
     "ProvisionerSandboxBackend",
     "ProvisionerSandboxProvider",
     "SandboxConnection",

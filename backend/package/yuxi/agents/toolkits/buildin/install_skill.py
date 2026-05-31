@@ -46,7 +46,10 @@
 
 
 # def _collect_sandbox_file_paths(backend, remote_dir: str) -> list[str]:
-#     entries = backend.ls_info(remote_dir)
+#     result = backend.ls(remote_dir)
+#     if result.error:
+#         raise ValueError(result.error)
+#     entries = result.entries or []
 #     file_paths: list[str] = []
 #     for entry in entries:
 #         path = entry["path"]

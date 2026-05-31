@@ -646,12 +646,22 @@ const checkMentionTrigger = () => {
 
 // 更新提及候选项
 const updateMentionItems = (query = '') => {
+  const normalizedQuery = String(query || '')
+  if (!normalizedQuery) {
+    clearTimeout(mentionSearchTimer)
+    if (activeAbortController) {
+      activeAbortController.abort()
+      activeAbortController = null
+    }
+    searchRequestId.value++
+  }
+
   if (!props.mention) {
     mentionItems.value = { files: [], knowledgeBases: [], mcps: [], skills: [], subagents: [] }
     return
   }
 
-  const lowerQuery = query.toLowerCase()
+  const lowerQuery = normalizedQuery.toLowerCase()
   const { files = [], knowledgeBases = [], mcps = [], skills = [], subagents = [] } = props.mention
 
   const filterItems = (list) =>
@@ -686,7 +696,7 @@ const updateMentionItems = (query = '') => {
     }
   })
 
-  const filteredLocalFiles = query ? filterItems(localFileItems) : []
+  const filteredLocalFiles = normalizedQuery ? filterItems(localFileItems) : []
 
   const knowledgeItems = knowledgeBases.map((kb) => {
     const kbName = kb.name || ''
@@ -749,23 +759,23 @@ const updateMentionItems = (query = '') => {
     subagents: filterItems(subagentItems)
   }
 
-  if (query) {
+  if (normalizedQuery) {
     const activeThreadId = props.threadId || ''
     clearTimeout(mentionSearchTimer)
-    mentionSearchTimer = setTimeout(async () => {
-      // 物理中断之前的未完成 HTTP 请求
-      if (activeAbortController) {
-        activeAbortController.abort()
-      }
-      activeAbortController = new AbortController()
+    if (activeAbortController) {
+      activeAbortController.abort()
+      activeAbortController = null
+    }
+    searchRequestId.value++
+    const currentId = searchRequestId.value
 
-      searchRequestId.value++
-      const currentId = searchRequestId.value
+    mentionSearchTimer = setTimeout(async () => {
+      activeAbortController = new AbortController()
 
       try {
         const responseData = await searchMentionFiles(
           activeThreadId,
-          query,
+          normalizedQuery,
           activeAbortController.signal
         )
 

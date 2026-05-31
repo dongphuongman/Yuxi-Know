@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import importlib
 import uuid
+from types import SimpleNamespace
 
+from fastapi import HTTPException
 import pytest
 from yuxi.agents.backends.sandbox import (
     ensure_thread_dirs,
@@ -95,8 +97,8 @@ async def test_viewer_tree_root_does_not_require_sandbox_listing(test_client, st
     thread_id = await _create_thread_for_user(test_client, headers)
 
     class _FailingSandbox:
-        def ls_info(self, path):
-            raise AssertionError(f"sandbox ls_info should not be used for root path: {path}")
+        def ls(self, path):
+            raise AssertionError(f"sandbox ls should not be used for root path: {path}")
 
     class _EmptyBackend:
         def has_entries(self):
@@ -131,8 +133,8 @@ async def test_viewer_tree_user_data_uses_local_thread_directory(test_client, st
     actual_path.write_text("viewer tree", encoding="utf-8")
 
     class _FailingSandbox:
-        def ls_info(self, path):
-            raise AssertionError(f"sandbox ls_info should not be used for user-data path: {path}")
+        def ls(self, path):
+            raise AssertionError(f"sandbox ls should not be used for user-data path: {path}")
 
     class _EmptyBackend:
         def has_entries(self):
@@ -448,6 +450,7 @@ async def test_viewer_delete_rejects_readonly_namespace_directory(test_client, s
 @pytest.mark.parametrize(
     "protected_path",
     [
+        "/home/gem/user-data",
         "/home/gem/user-data/workspace",
         "/home/gem/user-data/uploads",
         "/home/gem/user-data/outputs",
@@ -469,6 +472,30 @@ async def test_viewer_delete_rejects_protected_user_data_root_directories(
     )
     assert response.status_code == 400, response.text
     assert response.json()["detail"] == "当前目录不允许删除"
+
+
+async def test_delete_viewer_file_rejects_user_data_root_without_removing(monkeypatch):
+    from yuxi.services import viewer_filesystem_service as service_module
+
+    async def _fake_resolve_viewer_state(**kwargs):
+        return object(), object(), []
+
+    def _fail_rmtree(path):
+        raise AssertionError(f"unexpected root removal: {path}")
+
+    monkeypatch.setattr(service_module, "_resolve_viewer_state", _fake_resolve_viewer_state)
+    monkeypatch.setattr(service_module.shutil, "rmtree", _fail_rmtree)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await service_module.delete_viewer_file(
+            thread_id="thread-1",
+            path="/home/gem/user-data",
+            current_user=SimpleNamespace(uid="user-1"),
+            db=None,
+        )
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail == "当前目录不允许删除"
 
 
 async def test_viewer_create_directory_adds_workspace_folder(test_client, standard_user):

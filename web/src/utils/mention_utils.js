@@ -9,11 +9,18 @@ export const mentionTypePrefixMap = {
 }
 
 const mentionTypePattern = Object.values(mentionTypePrefixMap).join('|')
-const mentionTokenRegex = new RegExp(`@(${mentionTypePattern}):\\S+`, 'g')
+const mentionTokenRegex = new RegExp(`@(${mentionTypePattern}):(?:"((?:\\\\.|[^"\\\\])*)"|(\\S+))`, 'g')
+
+const quoteMentionValue = (value) => String(value ?? '').replace(/\\/g, '\\\\').replace(/"/g, '\\"')
+const unquoteMentionValue = (value) => String(value ?? '').replace(/\\(["\\])/g, '$1')
 
 export const formatMentionToken = (type, value) => {
   const prefix = mentionTypePrefixMap[type] || type
-  return `@${prefix}:${value}`
+  const rawValue = String(value ?? '')
+  if (/\s|["\\]/.test(rawValue)) {
+    return `@${prefix}:"${quoteMentionValue(rawValue)}"`
+  }
+  return `@${prefix}:${rawValue}`
 }
 
 export const parseMentionText = (text = '') => {
@@ -37,12 +44,13 @@ export const parseMentionText = (text = '') => {
     }
 
     const type = match[1]
-    const prefix = `@${type}:`
+    const quotedValue = match[2]
+    const rawValue = match[3]
     segments.push({
       kind: 'mention',
       raw,
       type,
-      value: raw.slice(prefix.length),
+      value: quotedValue !== undefined ? unquoteMentionValue(quotedValue) : rawValue,
       start,
       end
     })
@@ -63,7 +71,7 @@ export const parseMentionText = (text = '') => {
 }
 
 const setMentionLabel = (labels, type, value, label) => {
-  const rawValue = String(value || '').trim()
+  const rawValue = String(value ?? '').trim()
   const displayLabel = String(label || '').trim()
   if (!rawValue || !displayLabel) return
   labels[`${type}:${rawValue}`] = displayLabel
@@ -112,10 +120,10 @@ export const getMentionDisplayLabel = (type, value, displayLabels = {}) => {
   if (mappedLabel) return mappedLabel
 
   if (type === 'file') {
-    const normalizedPath = String(value || '').replace(/\/+$/, '')
+    const normalizedPath = String(value ?? '').replace(/\/+$/, '')
     return getDisplayFileName(normalizedPath || value, '文件')
   }
-  return String(value || '').trim() || type
+  return String(value ?? '').trim() || type
 }
 
 export const findActiveMentionQuery = (text = '', rawCaretOffset = 0) => {

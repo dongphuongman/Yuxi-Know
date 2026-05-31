@@ -38,6 +38,7 @@ from yuxi.utils.paths import VIRTUAL_PATH_OUTPUTS, VIRTUAL_PATH_UPLOADS, VIRTUAL
 
 _PROTECTED_USER_DATA_ROOTS = frozenset(
     {
+        USER_DATA_PATH,
         VIRTUAL_PATH_WORKSPACE,
         VIRTUAL_PATH_UPLOADS,
         VIRTUAL_PATH_OUTPUTS,
@@ -281,8 +282,10 @@ async def list_viewer_filesystem_tree(
             return {"entries": _sort_entries(entries)}
 
         if _is_skills_path(normalized_path):
-            entries = await asyncio.to_thread(skills_backend.ls_info, _strip_skills_prefix(normalized_path))
-            remapped = [_remap_prefixed_entry(entry, SKILLS_PATH) for entry in entries]
+            result = await asyncio.to_thread(skills_backend.ls, _strip_skills_prefix(normalized_path))
+            if result.error:
+                raise HTTPException(status_code=400, detail=result.error)
+            remapped = [_remap_prefixed_entry(entry, SKILLS_PATH) for entry in (result.entries or [])]
             return {"entries": _sort_entries(remapped)}
     except PermissionError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e

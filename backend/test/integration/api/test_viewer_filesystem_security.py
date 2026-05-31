@@ -9,15 +9,12 @@ pytestmark = [pytest.mark.asyncio, pytest.mark.integration]
 
 
 async def _create_thread_for_user(test_client, headers: dict[str, str]) -> str:
-    agents_resp = await test_client.get("/api/chat/agent", headers=headers)
-    assert agents_resp.status_code == 200, agents_resp.text
-    agents = agents_resp.json().get("agents", [])
-    if not agents:
-        pytest.skip("No agents available for viewer filesystem integration tests.")
-
-    agent_id = agents[0].get("id")
+    agent_resp = await test_client.get("/api/agent/default", headers=headers)
+    assert agent_resp.status_code == 200, agent_resp.text
+    agent = agent_resp.json().get("agent") or {}
+    agent_id = agent.get("slug") or agent.get("id")
     if not agent_id:
-        pytest.skip("Agent payload missing id field.")
+        pytest.skip("Default agent payload missing id field.")
 
     create_resp = await test_client.post(
         "/api/chat/thread",

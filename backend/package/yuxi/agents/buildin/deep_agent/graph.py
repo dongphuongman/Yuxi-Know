@@ -1,6 +1,5 @@
 import os
 
-from deepagents.middleware.filesystem import FilesystemMiddleware
 from deepagents.middleware.patch_tool_calls import PatchToolCallsMiddleware
 from deepagents.middleware.subagents import SubAgentMiddleware
 from langchain.agents import create_agent
@@ -10,16 +9,16 @@ from langchain.agents.middleware import (
 )
 
 from yuxi.agents import BaseAgent, BaseState, load_chat_model
-from yuxi.agents.backends import create_agent_composite_backend
+from yuxi.agents.backends import create_agent_composite_backend, create_agent_filesystem_middleware
 from yuxi.agents.context import prepare_agent_runtime_context
 from yuxi.agents.middlewares import (
-    SummaryOffloadMiddleware,
+    create_summary_middleware,
     save_attachments_to_fs,
 )
 from yuxi.agents.middlewares.knowledge_base_middleware import KnowledgeBaseMiddleware
 from yuxi.agents.middlewares.skills_middleware import SkillsMiddleware
 from yuxi.agents.toolkits.buildin.tools import _create_tavily_search
-from yuxi.agents.subagents.service import get_subagents_from_slugs
+from yuxi.agents.subagents.service import build_subagent_middleware_specs, get_subagents_from_slugs
 from yuxi.agents.toolkits.service import resolve_configured_runtime_tools
 from yuxi.utils import logger
 from yuxi.utils.datetime_utils import shanghai_now
@@ -65,31 +64,35 @@ class DeepAgent(BaseAgent):
         # 从数据库加载 subagent specs（工具名称已解析）
         user_subagents = await get_subagents_from_slugs(context.subagents)
 
-        # 主 Agent 上下文优化：90k tokens 触发压缩（128k context window 的 70%）
-        summary_middleware = SummaryOffloadMiddleware(
+        # 主 Agent 上下文优化：90k tokens 触发压缩，保留最近 50%
+        summary_middleware = create_summary_middleware(
             model=model,
             trigger=("tokens", 90000),
+            keep=("tokens", 45000),
             trim_tokens_to_summarize=4000,
-            summary_offload_threshold=500,
-            max_retention_ratio=0.5,
         )
 
+        default_subagent_middleware = [
+            create_agent_filesystem_middleware(tool_token_limit_before_evict=500),  # 文件系统后端
+            PatchToolCallsMiddleware(),
+            summary_middleware,
+            # 子 Agent 搜索工具限制：tavily_search 最多 8 次
+            ToolCallLimitMiddleware(
+                tool_name="tavily_search",
+                run_limit=8,
+                exit_behavior="continue",
+            ),
+        ]
         subagents_middleware = SubAgentMiddleware(
-            default_model=sub_model,
-            default_tools=search_tools,
-            subagents=user_subagents,
-            default_middleware=[
-                FilesystemMiddleware(backend=create_agent_composite_backend),  # 文件系统后端
-                PatchToolCallsMiddleware(),
-                summary_middleware,
-                # 子 Agent 搜索工具限制：tavily_search 最多 8 次
-                ToolCallLimitMiddleware(
-                    tool_name="tavily_search",
-                    run_limit=8,
-                    exit_behavior="continue",
-                ),
-            ],
-            general_purpose_agent=True,
+            backend=create_agent_composite_backend,
+            subagents=build_subagent_middleware_specs(
+                user_subagents,
+                default_model=sub_model,
+                default_tools=search_tools,
+                default_middleware=default_subagent_middleware,
+                model_loader=load_chat_model,
+            ),
+            state_schema=BaseState,
         )
 
         # 使用 create_deep_agent 创建深度智能体
@@ -98,7 +101,7 @@ class DeepAgent(BaseAgent):
             tools=await resolve_configured_runtime_tools(context),
             system_prompt=system_prompt,
             middleware=[
-                FilesystemMiddleware(backend=create_agent_composite_backend),  # 文件系统后端
+                create_agent_filesystem_middleware(tool_token_limit_before_evict=500),  # 文件系统后端
                 SkillsMiddleware(),  # Skills 中间件（提示词注入、依赖展开、动态激活）
                 save_attachments_to_fs,  # 附件注入提示词
                 TodoListMiddleware(system_prompt="任务结束前，应该检查维护的待办事项列表是否结束。"),

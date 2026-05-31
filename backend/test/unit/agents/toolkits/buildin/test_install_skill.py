@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from deepagents.backends.protocol import LsResult
 from langgraph.types import Command
 
 from yuxi.agents.toolkits.buildin.install_skill import (
@@ -112,13 +113,15 @@ def test_download_skill_dir_preserves_nested_files(tmp_path):
     calls = []
 
     class Backend:
-        def ls_info(self, path):
+        def ls(self, path):
             if path.endswith("/demo"):
-                return [
-                    {"path": f"{path}/SKILL.md", "is_dir": False},
-                    {"path": f"{path}/scripts", "is_dir": True},
-                ]
-            return [{"path": f"{path}/run.py", "is_dir": False}]
+                return LsResult(
+                    entries=[
+                        {"path": f"{path}/SKILL.md", "is_dir": False},
+                        {"path": f"{path}/scripts", "is_dir": True},
+                    ]
+                )
+            return LsResult(entries=[{"path": f"{path}/run.py", "is_dir": False}])
 
         def download_files(self, paths):
             calls.append(paths)
@@ -142,8 +145,8 @@ def test_download_skill_dir_raises_on_download_error(tmp_path):
     """_download_skill_dir should fail instead of importing a partial skill."""
 
     class Backend:
-        def ls_info(self, path):
-            return [{"path": f"{path}/SKILL.md", "is_dir": False}]
+        def ls(self, path):
+            return LsResult(entries=[{"path": f"{path}/SKILL.md", "is_dir": False}])
 
         def download_files(self, paths):
             return [SimpleNamespace(path=paths[0], content=None, error="file_not_found")]

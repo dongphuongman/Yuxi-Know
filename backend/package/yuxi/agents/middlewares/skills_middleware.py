@@ -6,6 +6,7 @@ from collections.abc import Callable
 from pathlib import PurePosixPath
 from typing import Annotated, Any, NotRequired, TypedDict
 
+from deepagents.middleware._utils import append_to_system_message
 from deepagents.middleware.skills import SKILLS_SYSTEM_PROMPT
 from langchain.agents import AgentState
 from langchain.agents.middleware import AgentMiddleware, ModelRequest, ModelResponse
@@ -197,41 +198,21 @@ class SkillsMiddleware(AgentMiddleware):
         self.enable_skills_prompt = enable_skills_prompt
         self.skills_sources_for_prompt = skills_sources_for_prompt or ["/home/gem/skills/"]
 
-    async def abefore_agent(self, state: SkillsState, runtime) -> dict[str, Any] | None:
-        """在 agent 执行前注入 skills 提示词"""
-        runtime_context = runtime.context
-
-        # 检查是否需要注入
-        if not self.enable_skills_prompt:
-            return None
-        if getattr(runtime_context, "_skills_prompt_injected", False):
-            return None
-
-        prompt_skills = getattr(runtime_context, "_prompt_skills", None)
-        if not isinstance(prompt_skills, list):
-            return None
-
-        prompt_skills = normalize_string_list(prompt_skills)
-        if not prompt_skills:
-            return None
-
-        # 收集提示词元数据并构建提示段
-        skills_meta = self._collect_prompt_metadata(prompt_skills, runtime_context)
-        skills_section = self._build_skills_section(skills_meta)
-
-        # 注入提示词
-        base_prompt = getattr(runtime_context, "system_prompt", "") or ""
-        merged_prompt = f"{base_prompt}\n\n{skills_section}" if base_prompt else skills_section
-        setattr(runtime_context, "system_prompt", merged_prompt)
-        setattr(runtime_context, "_skills_prompt_injected", True)
-
-        return None
-
     async def awrap_model_call(
         self, request: ModelRequest, handler: Callable[[ModelRequest], ModelResponse]
     ) -> ModelResponse:
-        """包装模型调用，处理动态激活和依赖展开"""
+        """包装模型调用，处理 skills 提示词注入、动态激活和依赖展开"""
         runtime_context = request.runtime.context
+
+        if self.enable_skills_prompt:
+            prompt_skills = getattr(runtime_context, "_prompt_skills", None)
+            if isinstance(prompt_skills, list):
+                prompt_skills = normalize_string_list(prompt_skills)
+                if prompt_skills:
+                    skills_meta = self._collect_prompt_metadata(prompt_skills, runtime_context)
+                    skills_section = self._build_skills_section(skills_meta)
+                    system_message = append_to_system_message(getattr(request, "system_message", None), skills_section)
+                    request = request.override(system_message=system_message)
 
         state = request.state if isinstance(request.state, dict) else {}
         activated = state.get("activated_skills", []) or []
@@ -473,5 +454,6 @@ class SkillsMiddleware(AgentMiddleware):
         skills_list = self._format_skills_list(skills_meta)
         return SKILLS_SYSTEM_PROMPT.format(
             skills_locations=skills_locations,
+            skills_load_warnings="",
             skills_list=skills_list,
         )

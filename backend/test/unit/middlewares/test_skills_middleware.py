@@ -3,11 +3,15 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pytest
-from langchain_core.messages import ToolMessage
+from langchain_core.messages import SystemMessage, ToolMessage
 from langgraph.types import Command
 
 import yuxi.agents.middlewares.skills_middleware as skills_middleware
 from yuxi.agents.middlewares.skills_middleware import SkillsMiddleware, resolve_runtime_skills_for_context
+
+
+def _system_message_text(message: SystemMessage) -> str:
+    return "\n".join(block.get("text", "") for block in message.content_blocks if isinstance(block, dict))
 
 
 @pytest.mark.asyncio
@@ -47,9 +51,9 @@ async def test_resolve_runtime_skills_derives_prompt_and_readable_closure(monkey
 
 
 @pytest.mark.asyncio
-async def test_skills_prompt_uses_prepared_prompt_skills():
+async def test_skills_prompt_uses_prepared_prompt_skills_at_request_level():
     context = SimpleNamespace(
-        system_prompt="base",
+        system_prompt="context base",
         skills=["configured-only"],
         _prompt_skills=["alpha"],
         _runtime_skill_metadata={
@@ -66,12 +70,34 @@ async def test_skills_prompt_uses_prepared_prompt_skills():
         },
     )
 
-    await SkillsMiddleware().abefore_agent({}, SimpleNamespace(context=context))
+    class FakeRequest:
+        def __init__(self, *, system_message=None, tools=None):
+            self.runtime = SimpleNamespace(context=context)
+            self.state = {}
+            self.tools = tools or []
+            self.system_message = system_message or SystemMessage(content="base")
 
-    assert "base" in context.system_prompt
-    assert "Alpha" in context.system_prompt
-    assert "Configured Only" not in context.system_prompt
-    assert getattr(context, "_skills_prompt_injected") is True
+        def override(self, **kwargs):
+            return FakeRequest(
+                system_message=kwargs.get("system_message", self.system_message),
+                tools=kwargs.get("tools", self.tools),
+            )
+
+    captured = {}
+
+    async def handler(request):
+        captured["system_message"] = request.system_message
+        return "ok"
+
+    result = await SkillsMiddleware().awrap_model_call(FakeRequest(), handler)
+    prompt_text = _system_message_text(captured["system_message"])
+
+    assert result == "ok"
+    assert "base" in prompt_text
+    assert "Alpha" in prompt_text
+    assert "Configured Only" not in prompt_text
+    assert context.system_prompt == "context base"
+    assert not hasattr(context, "_skills_prompt_injected")
     assert not hasattr(context, "_visible_skills")
 
 

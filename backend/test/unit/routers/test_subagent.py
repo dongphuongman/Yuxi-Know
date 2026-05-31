@@ -642,6 +642,35 @@ class TestDeepAgentSubagentSelection:
         assert [item["name"] for item in resolved_specs] == ["research-agent"]
         assert resolved_specs[0]["tools"] == [mock_tool]
 
+    def test_builtin_research_subagent_uses_virtual_outputs_path(self):
+        from yuxi.agents.subagents import service as service_module
+
+        research_agent = next(item for item in service_module._DEFAULT_SUBAGENTS if item["slug"] == "research-agent")
+
+        assert "/home/gem/user-data/outputs/sub_research/xxx.md" in research_agent["system_prompt"]
+
+    def test_build_subagent_middleware_specs_uses_default_tools_for_empty_tools(self):
+        from yuxi.agents.subagents import service as service_module
+
+        default_tool = MagicMock()
+
+        specs = service_module.build_subagent_middleware_specs(
+            [
+                {
+                    "slug": "empty-tools-agent",
+                    "name": "empty-tools-agent",
+                    "description": "",
+                    "system_prompt": "s",
+                    "tools": [],
+                }
+            ],
+            default_model="test-model",
+            default_tools=[default_tool],
+            include_general_purpose=False,
+        )
+
+        assert specs[0]["tools"] == [default_tool]
+
     @pytest.mark.asyncio
     async def test_get_subagents_from_slugs_none_selects_none(self, monkeypatch):
         from yuxi.agents.subagents import service as service_module

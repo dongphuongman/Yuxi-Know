@@ -5,13 +5,14 @@ from contextlib import asynccontextmanager
 from copy import deepcopy
 from typing import Any
 
+from deepagents.middleware.subagents import GENERAL_PURPOSE_SUBAGENT
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from yuxi.agents.subagents.repository import SubAgentRepository
 from yuxi.storage.postgres.manager import pg_manager
 from yuxi.storage.postgres.models_business import SubAgent
 from yuxi.utils import logger
-from yuxi.utils.paths import OUTPUTS_DIR_NAME
+from yuxi.utils.paths import VIRTUAL_PATH_OUTPUTS
 
 # SubAgent specs cache for get_subagent_specs
 _subagent_specs_cache: list[dict[str, Any]] | None = None
@@ -38,7 +39,7 @@ _DEFAULT_SUBAGENTS = [
             "你是一位专注的研究员。你的工作是根据用户的问题进行研究。"
             "进行彻底的研究，然后用详细的答案回复用户的问题，只有你的最终答案会被传递给用户。"
             "除了你的最终信息，他们不会知道任何其他事情，所以你的最终报告应该就是你的最终信息！"
-            f"将调研结果保存到主题研究文件中 {OUTPUTS_DIR_NAME}/sub_research/xxx.md 中。"
+            f"将调研结果保存到主题研究文件中 {VIRTUAL_PATH_OUTPUTS}/sub_research/xxx.md 中。"
         ),
         "tools": ["tavily_search"],
         "is_builtin": True,
@@ -132,6 +133,40 @@ def clear_specs_cache() -> None:
     """清除 subagent specs 缓存"""
     global _subagent_specs_cache
     _subagent_specs_cache = None
+
+
+def build_subagent_middleware_specs(
+    subagents: list[dict[str, Any]],
+    *,
+    default_model: Any,
+    default_tools: list[Any] | None = None,
+    default_middleware: list[Any] | None = None,
+    include_general_purpose: bool = True,
+    model_loader: Any | None = None,
+) -> list[dict[str, Any]]:
+    tools = list(default_tools or [])
+    middleware = list(default_middleware or [])
+    specs: list[dict[str, Any]] = []
+
+    if include_general_purpose:
+        specs.append(
+            {
+                **GENERAL_PURPOSE_SUBAGENT,
+                "model": default_model,
+                "tools": list(tools),
+                "middleware": list(middleware),
+            }
+        )
+
+    for spec in subagents:
+        item = {key: value for key, value in spec.items() if key != "slug"}
+        model_name = item.get("model")
+        item["model"] = model_loader(model_name) if model_name and model_loader else (model_name or default_model)
+        item["tools"] = list(item.get("tools") or tools)
+        item["middleware"] = [*middleware, *list(item.get("middleware", []))]
+        specs.append(item)
+
+    return specs
 
 
 async def get_subagents_from_slugs(selected_slugs: Any, *, db: AsyncSession | None = None) -> list[dict[str, Any]]:

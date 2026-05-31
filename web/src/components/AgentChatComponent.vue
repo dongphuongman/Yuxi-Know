@@ -1942,8 +1942,8 @@ watch(currentChatId, (threadId, oldThreadId) => {
   border: 1px solid var(--gray-150);
   border-radius: 16px;
   box-shadow:
-    0 16px 40px rgba(15, 23, 42, 0.1),
-    0 2px 10px rgba(15, 23, 42, 0.06);
+    0 16px 40px var(--shadow-1),
+    0 2px 10px var(--shadow-0);
   z-index: 20;
   margin: 0 8px 8px;
   margin-left: -16px;
@@ -2151,7 +2151,7 @@ watch(currentChatId, (threadId, oldThreadId) => {
   max-width: 800px;
   margin: 0 auto;
   flex-grow: 1;
-  padding: 1rem 1.5rem;
+  padding: 1rem var(--page-padding);
   display: flex;
   flex-direction: column;
 }

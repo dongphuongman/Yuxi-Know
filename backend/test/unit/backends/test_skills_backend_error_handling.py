@@ -9,8 +9,7 @@ from yuxi.agents.backends.skills_backend import SelectedSkillsReadonlyBackend
 def test_skills_backend_read_outside_root_returns_error_message(monkeypatch) -> None:
     def _fake_read(self, file_path: str, offset: int = 0, limit: int = 2000):
         raise ValueError(
-            "Path:/app/package/yuxi/agents/skills/buildin/reporter "
-            "outside root directory: /app/saves/skills"
+            "Path:/app/package/yuxi/agents/skills/buildin/reporter outside root directory: /app/saves/skills"
         )
 
     monkeypatch.setattr(FilesystemBackend, "read", _fake_read)
@@ -20,12 +19,12 @@ def test_skills_backend_read_outside_root_returns_error_message(monkeypatch) -> 
         backend.read("/reporter/SKILL.md")
 
 
-def test_skills_backend_ls_info_outside_root_returns_empty(monkeypatch) -> None:
-    def _fake_ls_info(self, path: str):
+def test_skills_backend_ls_outside_root_raises(monkeypatch) -> None:
+    def _fake_ls(self, path: str):
         raise ValueError("Path outside root directory")
 
-    monkeypatch.setattr(FilesystemBackend, "ls_info", _fake_ls_info)
+    monkeypatch.setattr(FilesystemBackend, "ls", _fake_ls)
 
     backend = SelectedSkillsReadonlyBackend(selected_slugs=["reporter"])
     with pytest.raises(ValueError, match="outside root directory"):
-        backend.ls_info("/reporter")
+        backend.ls("/reporter")

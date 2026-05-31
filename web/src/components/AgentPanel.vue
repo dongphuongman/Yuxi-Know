@@ -760,7 +760,7 @@ watch(
   min-height: 0;
   display: flex;
   flex-direction: column;
-  padding: 0 6px;
+  padding: 6px;
 }
 
 .files-display.has-preview.with-tree .tree-pane {

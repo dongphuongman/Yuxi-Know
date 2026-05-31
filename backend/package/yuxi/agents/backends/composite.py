@@ -6,65 +6,86 @@ from deepagents.backends.composite import (
     _route_for_path,
     _strip_route_from_pattern,
 )
-from deepagents.backends.protocol import FileInfo
+from deepagents.backends.protocol import FileInfo, GlobResult
+from deepagents.middleware.filesystem import FilesystemMiddleware
 
 from yuxi.agents.skills.service import normalize_string_list
+from yuxi.utils.paths import VIRTUAL_PATH_CONVERSATION_HISTORY, VIRTUAL_PATH_LARGE_TOOL_RESULTS, VIRTUAL_PATH_OUTPUTS
 
 from .sandbox import ProvisionerSandboxBackend
 from .skills_backend import SelectedSkillsReadonlyBackend
 
 
+def _coerce_glob_result(result) -> GlobResult:
+    if isinstance(result, GlobResult):
+        return result
+    return GlobResult(matches=result or [])
+
+
 class CustomCompositeBackend(CompositeBackend):
-    """修复 glob_info 路由逻辑的 CompositeBackend。
+    """修复 glob 路由逻辑的 CompositeBackend。
 
     修复内容：当 path 不匹配任何路由时应该只搜索 default 后端，
     而不是错误地遍历所有路由后端搜索。
     """
 
-    def glob_info(self, pattern: str, path: str = "/") -> list[FileInfo]:
+    def glob(self, pattern: str, path: str = "/") -> GlobResult:
         backend, backend_path, route_prefix = _route_for_path(
             default=self.default,
             sorted_routes=self.sorted_routes,
             path=path,
         )
         if route_prefix is not None:
-            infos = backend.glob_info(pattern, backend_path)
-            return [_remap_file_info_path(fi, route_prefix) for fi in infos]
+            result = _coerce_glob_result(backend.glob(pattern, backend_path))
+            if result.error:
+                return result
+            return GlobResult(matches=[_remap_file_info_path(fi, route_prefix) for fi in (result.matches or [])])
 
-        # 只在 path 为 None 或 "/" 时搜索所有后端，其他只搜索 default
         if path is None or path == "/":
             results: list[FileInfo] = []
-            results.extend(self.default.glob_info(pattern, path))
+            default_result = _coerce_glob_result(self.default.glob(pattern, path))
+            if default_result.error:
+                return default_result
+            results.extend(default_result.matches or [])
             for route_prefix, backend in self.routes.items():
                 route_pattern = _strip_route_from_pattern(pattern, route_prefix)
-                infos = backend.glob_info(route_pattern, "/")
-                results.extend(_remap_file_info_path(fi, route_prefix) for fi in infos)
+                result = _coerce_glob_result(backend.glob(route_pattern, "/"))
+                if result.error:
+                    return result
+                results.extend(_remap_file_info_path(fi, route_prefix) for fi in (result.matches or []))
             results.sort(key=lambda x: x.get("path", ""))
-            return results
+            return GlobResult(matches=results)
 
-        return self.default.glob_info(pattern, path)
+        return _coerce_glob_result(self.default.glob(pattern, path))
 
-    async def aglob_info(self, pattern: str, path: str = "/") -> list[FileInfo]:
+    async def aglob(self, pattern: str, path: str = "/") -> GlobResult:
         backend, backend_path, route_prefix = _route_for_path(
             default=self.default,
             sorted_routes=self.sorted_routes,
             path=path,
         )
         if route_prefix is not None:
-            infos = await backend.aglob_info(pattern, backend_path)
-            return [_remap_file_info_path(fi, route_prefix) for fi in infos]
+            result = _coerce_glob_result(await backend.aglob(pattern, backend_path))
+            if result.error:
+                return result
+            return GlobResult(matches=[_remap_file_info_path(fi, route_prefix) for fi in (result.matches or [])])
 
         if path is None or path == "/":
             results: list[FileInfo] = []
-            results.extend(await self.default.aglob_info(pattern, path))
+            default_result = _coerce_glob_result(await self.default.aglob(pattern, path))
+            if default_result.error:
+                return default_result
+            results.extend(default_result.matches or [])
             for route_prefix, backend in self.routes.items():
                 route_pattern = _strip_route_from_pattern(pattern, route_prefix)
-                infos = await backend.aglob_info(route_pattern, "/")
-                results.extend(_remap_file_info_path(fi, route_prefix) for fi in infos)
+                result = _coerce_glob_result(await backend.aglob(route_pattern, "/"))
+                if result.error:
+                    return result
+                results.extend(_remap_file_info_path(fi, route_prefix) for fi in (result.matches or []))
             results.sort(key=lambda x: x.get("path", ""))
-            return results
+            return GlobResult(matches=results)
 
-        return await self.default.aglob_info(pattern, path)
+        return _coerce_glob_result(await self.default.aglob(pattern, path))
 
 
 def _get_readable_skills_from_runtime(runtime) -> list[str]:
@@ -116,4 +137,15 @@ def create_agent_composite_backend(runtime) -> CompositeBackend:
         routes={
             "/skills/": SelectedSkillsReadonlyBackend(selected_slugs=readable_skills),
         },
+        artifacts_root=VIRTUAL_PATH_OUTPUTS,
     )
+
+
+def create_agent_filesystem_middleware(tool_token_limit_before_evict: int | None = None) -> FilesystemMiddleware:
+    middleware = FilesystemMiddleware(
+        backend=create_agent_composite_backend,
+        tool_token_limit_before_evict=tool_token_limit_before_evict,
+    )
+    middleware._large_tool_results_prefix = VIRTUAL_PATH_LARGE_TOOL_RESULTS
+    middleware._conversation_history_prefix = VIRTUAL_PATH_CONVERSATION_HISTORY
+    return middleware

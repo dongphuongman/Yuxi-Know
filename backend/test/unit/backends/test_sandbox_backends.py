@@ -5,10 +5,16 @@ from __future__ import annotations
 from types import MethodType, SimpleNamespace
 
 import pytest
-from yuxi.agents.backends.composite import create_agent_composite_backend
+from deepagents.backends.protocol import GlobResult
+from yuxi.agents.backends.composite import (
+    CustomCompositeBackend,
+    create_agent_composite_backend,
+    create_agent_filesystem_middleware,
+)
 from yuxi.agents.backends.sandbox import resolve_virtual_path, sandbox_id_for_thread
 from yuxi.agents.backends.sandbox.backend import ProvisionerSandboxBackend
 from yuxi.agents.middlewares.skills_middleware import SkillsMiddleware
+from yuxi.utils.paths import VIRTUAL_PATH_CONVERSATION_HISTORY, VIRTUAL_PATH_LARGE_TOOL_RESULTS
 
 
 def _runtime(
@@ -40,6 +46,7 @@ def test_create_agent_composite_backend_uses_prepared_readable_skills(monkeypatc
 
     assert isinstance(backend.default, ProvisionerSandboxBackend)
     assert backend.default._readable_skills == ["reporter"]
+    assert backend.artifacts_root == "/home/gem/user-data/outputs"
     assert "/skills/" in backend.routes
     assert "/home/gem/kbs/" not in backend.routes
 
@@ -55,6 +62,35 @@ def test_create_agent_composite_backend_ignores_unprepared_context_skills(monkey
     backend = create_agent_composite_backend(_runtime(skills=["configured"], readable_skills=None))
 
     assert backend.default._readable_skills == []
+
+
+def test_create_agent_filesystem_middleware_uses_outputs_for_internal_artifacts() -> None:
+    middleware = create_agent_filesystem_middleware(tool_token_limit_before_evict=500)
+
+    assert middleware._tool_token_limit_before_evict == 500
+    assert middleware._large_tool_results_prefix == VIRTUAL_PATH_LARGE_TOOL_RESULTS
+    assert middleware._conversation_history_prefix == VIRTUAL_PATH_CONVERSATION_HISTORY
+
+
+def test_custom_composite_glob_only_searches_routes_from_root() -> None:
+    class _Backend:
+        def __init__(self, name: str):
+            self.name = name
+            self.calls: list[tuple[str, str]] = []
+
+        def glob(self, pattern: str, path: str = "/") -> GlobResult:
+            self.calls.append((pattern, path))
+            return GlobResult(matches=[{"path": f"{path.rstrip('/')}/{self.name}.md"}])
+
+    default = _Backend("default")
+    routed = _Backend("skill")
+    backend = CustomCompositeBackend(default=default, routes={"/skills/": routed})
+
+    result = backend.glob("**/*.md", path="/home/gem/user-data")
+
+    assert result.error is None
+    assert default.calls == [("**/*.md", "/home/gem/user-data")]
+    assert routed.calls == []
 
 
 def test_skills_middleware_extracts_slug_for_new_paths() -> None:
@@ -82,6 +118,73 @@ def test_sandbox_id_for_thread_is_stable():
     assert len(sid1) == 12
 
 
+def test_provisioner_denies_reads_outside_allowed_roots(monkeypatch) -> None:
+    monkeypatch.setattr("yuxi.agents.backends.sandbox.backend.get_sandbox_provider", lambda: object())
+    backend = ProvisionerSandboxBackend(thread_id="thread-1", uid="user-1")
+
+    result = backend.read("/etc/passwd")
+
+    assert result.error == "permission denied for read on '/etc/passwd'"
+
+
+def test_provisioner_denies_upload_writes(monkeypatch) -> None:
+    monkeypatch.setattr("yuxi.agents.backends.sandbox.backend.get_sandbox_provider", lambda: object())
+    backend = ProvisionerSandboxBackend(thread_id="thread-1", uid="user-1")
+
+    write_result = backend.write("/home/gem/user-data/uploads/blocked.txt", "blocked")
+    upload_result = backend.upload_files([("/home/gem/user-data/uploads/blocked.bin", b"blocked")])
+
+    assert write_result.error and "permission denied" in write_result.error
+    assert upload_result[0].error == "permission_denied"
+
+
+def test_provisioner_allows_outputs_writes(monkeypatch) -> None:
+    monkeypatch.setattr("yuxi.agents.backends.sandbox.backend.get_sandbox_provider", lambda: object())
+    backend = ProvisionerSandboxBackend(thread_id="thread-1", uid="user-1")
+
+    def _missing_file(path, offset=0, limit=None):
+        raise FileNotFoundError
+
+    monkeypatch.setattr(backend, "_read_binary", _missing_file)
+
+    calls = []
+
+    def _write_file(**kwargs):
+        calls.append(kwargs)
+        return SimpleNamespace(success=True, message="")
+
+    fake_client = SimpleNamespace(file=SimpleNamespace(write_file=_write_file))
+    backend._get_client = MethodType(lambda self: fake_client, backend)
+
+    result = backend.write("/home/gem/user-data/outputs/report.md", "ok")
+
+    assert result.error is None
+    assert result.path == "/home/gem/user-data/outputs/report.md"
+    assert calls[0]["file"] == "/home/gem/user-data/outputs/report.md"
+
+
+def test_provisioner_glob_root_searches_readable_roots(monkeypatch) -> None:
+    monkeypatch.setattr("yuxi.agents.backends.sandbox.backend.get_sandbox_provider", lambda: object())
+    backend = ProvisionerSandboxBackend(thread_id="thread-1", uid="user-1")
+    calls = []
+
+    def _find_files(**kwargs):
+        calls.append(kwargs)
+        return SimpleNamespace(data=SimpleNamespace(files=[f"{kwargs['path']}/match.md"]))
+
+    fake_client = SimpleNamespace(file=SimpleNamespace(find_files=_find_files))
+    backend._get_client = MethodType(lambda self: fake_client, backend)
+
+    result = backend.glob("**/*.md")
+
+    assert result.error is None
+    assert [call["path"] for call in calls] == ["/home/gem/user-data", "/home/gem/skills"]
+    assert [item["path"] for item in result.matches] == [
+        "/home/gem/skills/match.md",
+        "/home/gem/user-data/match.md",
+    ]
+
+
 def test_provisioner_read_reports_binary_files(monkeypatch) -> None:
     monkeypatch.setattr("yuxi.agents.backends.sandbox.backend.get_sandbox_provider", lambda: object())
     backend = ProvisionerSandboxBackend(thread_id="thread-1", uid="user-1")
@@ -89,21 +192,27 @@ def test_provisioner_read_reports_binary_files(monkeypatch) -> None:
 
     result = backend.read("/home/gem/user-data/image.png")
 
-    assert result == "Error: File '/home/gem/user-data/image.png' is binary and cannot be rendered as text"
+    assert result.error is None
+    assert result.file_data is not None
+    assert result.file_data["encoding"] == "base64"
 
 
 def test_provisioner_read_reports_invalid_path(monkeypatch) -> None:
     monkeypatch.setattr("yuxi.agents.backends.sandbox.backend.get_sandbox_provider", lambda: object())
     backend = ProvisionerSandboxBackend(thread_id="thread-1", uid="user-1")
 
-    def _raise_invalid_path(path, offset=0, limit=None):
-        raise ValueError("path traversal is not allowed")
+    result = backend.read("secret.txt")
 
-    monkeypatch.setattr(backend, "_read_binary", _raise_invalid_path)
+    assert result.error == "Invalid path 'secret.txt': path must start with /"
 
-    result = backend.read("../secret.txt")
 
-    assert result == "Error: Invalid path '../secret.txt': path traversal is not allowed"
+def test_provisioner_read_reports_path_traversal(monkeypatch) -> None:
+    monkeypatch.setattr("yuxi.agents.backends.sandbox.backend.get_sandbox_provider", lambda: object())
+    backend = ProvisionerSandboxBackend(thread_id="thread-1", uid="user-1")
+
+    result = backend.read("/home/gem/user-data/../secret.txt")
+
+    assert result.error == "Invalid path '/home/gem/user-data/../secret.txt': path traversal is not allowed"
 
 
 def test_provisioner_download_files_distinguishes_invalid_path_from_read_failure(monkeypatch) -> None:
@@ -111,13 +220,11 @@ def test_provisioner_download_files_distinguishes_invalid_path_from_read_failure
     backend = ProvisionerSandboxBackend(thread_id="thread-1", uid="user-1")
 
     def _fake_read_binary(path, offset=0, limit=None):
-        if path == "/bad-path":
-            raise ValueError("path is required")
         raise RuntimeError("sandbox read timeout")
 
     monkeypatch.setattr(backend, "_read_binary", _fake_read_binary)
 
-    responses = backend.download_files(["/bad-path", "/read-failed"])
+    responses = backend.download_files(["bad-path", "/home/gem/user-data/read-failed"])
 
     assert responses[0].error == "invalid_path"
     assert responses[1].error.startswith("read_failed")
