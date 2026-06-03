@@ -137,7 +137,7 @@ const mainList = computed(() => {
 
   items.push({
     name: '智能体扩展',
-    path: '/extensions?tab=skills',
+    path: '/extensions',
     activePaths: ['/extensions'],
     icon: LibraryBig,
     activeIcon: LibraryBig

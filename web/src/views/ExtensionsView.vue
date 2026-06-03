@@ -42,7 +42,7 @@ import { useUserStore } from '@/stores/user'
 const route = useRoute()
 const router = useRouter()
 const userStore = useUserStore()
-const activeTab = ref('skills')
+const activeTab = ref(null)
 const knowledgeRef = ref(null)
 const skillsRef = ref(null)
 const mcpRef = ref(null)
@@ -57,10 +57,21 @@ const adminExtensionTabs = [
 const userExtensionTabs = [{ key: 'skills', label: 'Skills' }]
 const extensionTabs = computed(() => (userStore.isAdmin ? adminExtensionTabs : userExtensionTabs))
 const allowedTabKeys = computed(() => extensionTabs.value.map((tab) => tab.key))
+const defaultTabKey = computed(() => extensionTabs.value[0]?.key || 'skills')
 
 const normalizeTab = (tab) => {
   if (allowedTabKeys.value.includes(tab)) return tab
-  return userStore.isAdmin ? 'knowledge' : 'skills'
+  return defaultTabKey.value
+}
+
+const replaceTabQuery = (tab) => {
+  const query = { ...route.query }
+  if (tab === defaultTabKey.value) {
+    delete query.tab
+  } else {
+    query.tab = tab
+  }
+  router.replace({ query })
 }
 
 const isDetailPage = computed(() => {
@@ -87,19 +98,20 @@ watch(
   ([tab]) => {
     const nextTab = normalizeTab(tab)
     if (activeTab.value !== nextTab) activeTab.value = nextTab
-    if (route.query.tab !== nextTab) router.replace({ query: { ...route.query, tab: nextTab } })
+    if (tab && tab !== nextTab) replaceTabQuery(nextTab)
   },
   { immediate: true }
 )
 
 watch(activeTab, (tab) => {
+  if (!tab) return
   const nextTab = normalizeTab(tab)
   if (nextTab !== tab) {
     activeTab.value = nextTab
     return
   }
-  if (route.query.tab === nextTab) return
-  router.replace({ query: { ...route.query, tab: nextTab } })
+  if (route.query.tab === nextTab || (!route.query.tab && nextTab === defaultTabKey.value)) return
+  replaceTabQuery(nextTab)
 })
 </script>
 

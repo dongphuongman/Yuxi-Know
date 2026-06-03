@@ -138,11 +138,6 @@ const router = createRouter({
       ]
     },
     {
-      path: '/skills',
-      name: 'skills',
-      redirect: '/extensions?tab=skills'
-    },
-    {
       path: '/:pathMatch(.*)*',
       name: 'NotFound',
       component: () => import('../views/EmptyView.vue'),
