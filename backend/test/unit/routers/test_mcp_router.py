@@ -49,7 +49,7 @@ def test_update_mcp_server_status(monkeypatch):
             self.enabled = enabled
 
         def to_dict(self):
-            return {"name": "sequentialthinking", "enabled": self.enabled}
+            return {"name": "demo-mcp", "enabled": self.enabled}
 
     async def fake_set_server_enabled(db, name, enabled, updated_by=None):
         captured["name"] = name
@@ -60,13 +60,13 @@ def test_update_mcp_server_status(monkeypatch):
     monkeypatch.setattr("server.routers.mcp_router.set_server_enabled", fake_set_server_enabled)
 
     client = TestClient(_build_app())
-    resp = client.put("/api/system/mcp-servers/sequentialthinking/status", json={"enabled": False})
+    resp = client.put("/api/system/mcp-servers/demo-mcp/status", json={"enabled": False})
     assert resp.status_code == 200, resp.text
     payload = resp.json()
     assert payload["success"] is True
     assert payload["enabled"] is False
     assert payload["data"]["enabled"] is False
-    assert captured == {"name": "sequentialthinking", "enabled": False, "updated_by": "admin"}
+    assert captured == {"name": "demo-mcp", "enabled": False, "updated_by": "admin"}
 
 
 def test_update_mcp_server_status_not_found(monkeypatch):

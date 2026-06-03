@@ -38,13 +38,6 @@ _UNSET = object()
 
 # Default MCP Server configurations (Imported to DB on first run)
 _DEFAULT_MCP_SERVERS = {
-    "sequentialthinking": {
-        "url": "https://remote.mcpservers.org/sequentialthinking/mcp",
-        "transport": "streamable_http",
-        "description": "顺序思考工具，帮助 AI 将复杂问题分解为多个步骤",
-        "icon": "🧠",
-        "tags": ["内置", "AI"],
-    },
     "mcp-server-chart": {
         "command": "npx",
         "args": ["-y", "@antv/mcp-server-chart"],
@@ -54,6 +47,8 @@ _DEFAULT_MCP_SERVERS = {
         "tags": ["内置", "图表"],
     },
 }
+
+_RETIRED_BUILTIN_MCP_SERVER_SLUGS = ("sequentialthinking",)
 
 _SYNCED_MCP_FIELDS = (
     "description",
@@ -81,6 +76,17 @@ async def ensure_builtin_mcp_servers_in_db() -> None:
     try:
         async with pg_manager.get_async_session_context() as session:
             any_changed = False
+            for slug in _RETIRED_BUILTIN_MCP_SERVER_SLUGS:
+                result = await session.execute(
+                    select(MCPServer).filter(MCPServer.slug == slug, MCPServer.created_by == "system")
+                )
+                retired = result.scalar_one_or_none()
+                if retired:
+                    await session.delete(retired)
+                    clear_mcp_server_tools_cache(slug)
+                    any_changed = True
+                    logger.info(f"Removed retired built-in MCP server '{slug}' from database")
+
             for slug, config in _DEFAULT_MCP_SERVERS.items():
                 result = await session.execute(select(MCPServer).filter(MCPServer.slug == slug))
                 existing = result.scalar_one_or_none()
