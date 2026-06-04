@@ -132,12 +132,10 @@ class EvaluationMetricsCalculator:
     def calculate_overall_score(
         retrieval_metrics_list: list[dict[str, float]], answer_metrics_list: list[dict[str, Any]]
     ) -> float | None:
-        """计算整体平均分，只聚合检索指标。"""
-        retrieval_scores = []
+        """综合得分：有答案准确率则用准确率，否则用 recall@10。"""
+        if answer_metrics_list:
+            scores = [m.get("score", 0.0) for m in answer_metrics_list]
+            return sum(scores) / len(scores) if scores else None
 
-        # 计算检索平均分
-        for m in retrieval_metrics_list:
-            if m:
-                retrieval_scores.append(sum(m.values()) / len(m))
-
-        return sum(retrieval_scores) / len(retrieval_scores) if retrieval_scores else None
+        recalls = [m["recall@10"] for m in retrieval_metrics_list if m and "recall@10" in m]
+        return sum(recalls) / len(recalls) if recalls else None
