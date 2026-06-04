@@ -20,40 +20,6 @@ branding:
     - "让智能体可落地，让流程可编排，让协作可扩展"
     - "让数据可沉淀，让能力可复用，让系统可进化"
 
-features:
-  - label: "GitHub Stars"
-    value: "4800+"
-    description: "开发者社区的认可与支持"
-    icon: "stars"
-  - label: "已解决 Issues"
-    value: "300+"
-    description: "持续改进和问题解决能力"
-    icon: "issues"
-  - label: "累计 Commits"
-    value: "1600+"
-    description: "活跃的开发迭代和功能更新"
-    icon: "commits"
-  - label: "开源协议"
-    value: "MIT License"
-    description: "完全免费，支持商业使用"
-    icon: "license"
-
-actions:
-  - name: "演示视频"
-    icon: "video"
-    url: "https://www.bilibili.com/video/BV1DF14BTETq"
-  - name: "文档中心"
-    icon: "docs"
-    url: "https://xerrors.github.io/Yuxi/"
-  - name: "提交 Issue"
-    icon: "issue"
-    url: "https://github.com/xerrors/Yuxi/issues/new/choose"
-  - name: "开发路线图"
-    icon: "roadmap"
-    url: "https://xerrors.github.io/Yuxi/develop-guides/roadmap.html"
-
-
-
 # 页脚信息
 footer:
   copyright: "© 江南语析 2026 v{{YUXI_VERSION}}"

@@ -30,11 +30,6 @@ export const useInfoStore = defineStore('info', () => {
       }
   )
 
-  // 计算属性 - 功能特性
-  const features = computed(() => infoConfig.value.features || [])
-
-  const actions = computed(() => infoConfig.value.actions || [])
-
   // 计算属性 - 页脚信息
   const footer = computed(() => ({
     copyright: '',
@@ -89,9 +84,7 @@ export const useInfoStore = defineStore('info', () => {
     // 计算属性
     organization,
     branding,
-    features,
     footer,
-    actions,
 
     // 方法
     toggleDebugMode,
