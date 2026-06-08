@@ -5264,7 +5264,7 @@ wheels = [
 
 [[package]]
 name = "yuxi"
-version = "0.7.0.beta2"
+version = "0.7.0.beta3"
 source = { editable = "." }
 dependencies = [
     { name = "agent-sandbox" },
