@@ -68,7 +68,7 @@ Yuxi 支持多种文档格式的智能解析，从简单的文本文件到复杂
 
 ### MinerU（高精度）
 
-项目已内置 `mineru-api` 服务（位于 `docker-compose.yml`，属于 `all` profile），无需额外下载官方 compose 文件。首次启动会基于 `docker/mineru.Dockerfile` 构建镜像并下载模型，耗时较长。
+项目已内置 mineru-api 服务（位于 docker-compose.yml，属于 all profile），无需额外下载官方 compose 文件。首次构建镜像时会基于 docker/mineru.Dockerfile 下载模型，该过程耗时较长。
 
 启动服务（需要 GPU）：
 
