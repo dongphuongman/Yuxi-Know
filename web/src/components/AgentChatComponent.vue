@@ -1285,7 +1285,8 @@ const historyConversations = computed(() => {
 
 function getMessageRequestId(message) {
   const metadataRequestId = message?.extra_metadata?.request_id
-  if (typeof metadataRequestId === 'string' && metadataRequestId.trim()) return metadataRequestId.trim()
+  if (typeof metadataRequestId === 'string' && metadataRequestId.trim())
+    return metadataRequestId.trim()
   if (message?.type === 'human' && typeof message.id === 'string' && message.id.trim()) {
     return message.id.trim()
   }
@@ -1341,10 +1342,8 @@ function mergeOngoingUserMessageIntoHistory(historyConvs, ongoingMessages) {
 
 const conversations = computed(() => {
   const historyConvs = historyConversations.value
-  const {
-    historyConvs: mergedHistoryConvs,
-    ongoingMessages: mergedOngoingMessages
-  } = mergeOngoingUserMessageIntoHistory(historyConvs, onGoingConvMessages.value)
+  const { historyConvs: mergedHistoryConvs, ongoingMessages: mergedOngoingMessages } =
+    mergeOngoingUserMessageIntoHistory(historyConvs, onGoingConvMessages.value)
 
   // 如果有进行中的消息且线程状态显示正在流式处理，添加进行中的对话
   if (mergedOngoingMessages.length > 0) {

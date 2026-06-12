@@ -6,7 +6,6 @@ from yuxi.models.providers.cache import model_cache
 from yuxi.utils import get_docker_safe_url
 from yuxi.utils.logging_config import logger
 
-
 # 这些提供商的 OpenAI 兼容流式接口，在 LangGraph v3 事件流累积工具调用时会丢失
 # tool_call 的关键字段（siliconflow MiniMax 丢 name、alibaba 百炼丢 id），空值会被写入
 # checkpoint，导致工具结果无法按 tool_call_id 关联、工具状态永远停留在“进行中”。

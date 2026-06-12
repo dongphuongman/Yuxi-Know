@@ -1,9 +1,9 @@
 <template>
-  <div
-    v-if="message.type === 'human' && message.image_content"
-    class="message-image"
-  >
-    <img :src="`data:${messageImageMimeType};base64,${message.image_content}`" alt="用户上传的图片" />
+  <div v-if="message.type === 'human' && message.image_content" class="message-image">
+    <img
+      :src="`data:${messageImageMimeType};base64,${message.image_content}`"
+      alt="用户上传的图片"
+    />
   </div>
   <div
     class="message-box"

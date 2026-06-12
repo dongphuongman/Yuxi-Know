@@ -43,7 +43,7 @@
 **1. 克隆代码并初始化**
 
 ```bash
-git clone --branch v0.7.0.beta3 --depth 1 https://github.com/xerrors/Yuxi.git
+git clone --branch v0.7.0 --depth 1 https://github.com/xerrors/Yuxi.git
 cd Yuxi
 
 # Linux/macOS
