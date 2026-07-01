@@ -18,7 +18,7 @@ from yuxi.repositories.conversation_repository import ConversationRepository
 from yuxi.services.mention_search_service import invalidate_mention_cache
 from yuxi.storage.minio import StorageError, get_minio_client
 from yuxi.storage.postgres.models_business import User
-from yuxi.utils.datetime_utils import utc_isoformat
+from yuxi.utils.datetime_utils import format_utc_datetime, utc_isoformat
 from yuxi.utils.logging_config import logger
 from yuxi.utils.paths import VIRTUAL_PATH_UPLOADS
 from yuxi.utils.upload_utils import read_upload_with_limit, write_upload_to_path
@@ -475,6 +475,60 @@ async def list_threads_view(
         }
         for conv in conversations
     ]
+
+
+async def search_threads_view(
+    *,
+    query: str,
+    agent_id: str | None,
+    db: AsyncSession,
+    current_uid: str,
+    limit: int = 20,
+    offset: int = 0,
+) -> dict:
+    normalized_query = str(query or "").strip()
+    if not normalized_query:
+        return {"items": [], "has_more": False, "limit": limit, "offset": offset}
+
+    conv_repo = ConversationRepository(db)
+    search_items, has_more = await conv_repo.search_conversations_by_message_content(
+        uid=str(current_uid),
+        agent_id=agent_id,
+        query=normalized_query,
+        limit=limit,
+        offset=offset,
+    )
+
+    items = []
+    for item in search_items:
+        conv = item["conversation"]
+        snippets = [
+            {
+                "message_id": snippet.get("message_id"),
+                "content": snippet.get("content") or "",
+                "created_at": format_utc_datetime(snippet.get("created_at")),
+            }
+            for snippet in item.get("snippets", [])
+        ]
+        items.append(
+            {
+                "id": conv.thread_id,
+                "thread_id": conv.thread_id,
+                "uid": conv.uid,
+                "agent_id": conv.agent_id,
+                "title": conv.title,
+                "is_pinned": bool(conv.is_pinned),
+                "created_at": format_utc_datetime(conv.created_at),
+                "updated_at": format_utc_datetime(conv.updated_at),
+                "metadata": conv.extra_metadata or {},
+                "matched_count": item.get("matched_count", 0),
+                "message_id": item.get("message_id"),
+                "latest_match_at": format_utc_datetime(item.get("latest_match_at")),
+                "snippets": snippets,
+            }
+        )
+
+    return {"items": items, "has_more": has_more, "limit": limit, "offset": offset}
 
 
 async def delete_thread_view(

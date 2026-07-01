@@ -207,6 +207,27 @@ export const threadApi = {
   },
 
   /**
+   * 搜索历史对话
+   * @param {string} query - 搜索关键词
+   * @param {Object} options - 搜索选项
+   * @param {string | null | undefined} options.agentId - 智能体ID，可选
+   * @param {number} options.limit - 返回数量限制
+   * @param {number} options.offset - 偏移量
+   * @returns {Promise} - 搜索结果
+   */
+  searchThreads: (query, { agentId = null, limit = 20, offset = 0 } = {}) => {
+    const params = new URLSearchParams({
+      q: query,
+      limit: String(limit),
+      offset: String(offset)
+    })
+    if (agentId) {
+      params.set('agent_id', agentId)
+    }
+    return apiGet(`/api/chat/threads/search?${params.toString()}`)
+  },
+
+  /**
    * 创建新对话线程
    * @param {string} agentId - 智能体ID
    * @param {string} title - 对话标题

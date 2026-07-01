@@ -4,7 +4,7 @@
 
 import uuid as uuid_lib
 
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from sqlalchemy.orm.attributes import flag_modified
@@ -14,6 +14,11 @@ from yuxi.utils import logger
 from yuxi.utils.datetime_utils import utc_now_naive
 
 MAX_CONVERSATION_TITLE_LENGTH = 255
+MESSAGE_SEARCH_SNIPPET_RADIUS = 72
+MESSAGE_SEARCH_SNIPPET_MAX_LENGTH = 180
+MESSAGE_SEARCH_SNIPPETS_PER_THREAD = 2
+MESSAGE_SEARCH_ROLES = ("user", "assistant")
+MESSAGE_SEARCH_EXCLUDED_TYPES = ("tool_call", "tool_result")
 
 
 class ConversationRepository:
@@ -32,6 +37,35 @@ class ConversationRepository:
             )
             return normalized[:MAX_CONVERSATION_TITLE_LENGTH]
         return normalized
+
+    def _escape_like_query(self, query: str) -> str:
+        return query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+    def _message_search_conditions(self, query: str):
+        pattern = f"%{self._escape_like_query(query)}%"
+        return [
+            Message.role.in_(MESSAGE_SEARCH_ROLES),
+            or_(Message.message_type.is_(None), Message.message_type.notin_(MESSAGE_SEARCH_EXCLUDED_TYPES)),
+            Message.content.ilike(pattern, escape="\\"),
+        ]
+
+    def _build_message_search_snippet(self, content: str, query: str) -> str:
+        normalized = " ".join(str(content or "").split())
+        if not normalized:
+            return ""
+
+        match_index = normalized.lower().find(query.lower())
+        if match_index < 0:
+            return normalized[:MESSAGE_SEARCH_SNIPPET_MAX_LENGTH]
+
+        start = max(0, match_index - MESSAGE_SEARCH_SNIPPET_RADIUS)
+        end = min(len(normalized), match_index + len(query) + MESSAGE_SEARCH_SNIPPET_RADIUS)
+        snippet = normalized[start:end].strip()
+        if start > 0:
+            snippet = f"...{snippet}"
+        if end < len(normalized):
+            snippet = f"{snippet}..."
+        return snippet[:MESSAGE_SEARCH_SNIPPET_MAX_LENGTH]
 
     async def create_conversation(
         self,
@@ -276,6 +310,80 @@ class ConversationRepository:
             non_pinned_conversations = []
 
         return pinned_conversations + non_pinned_conversations
+
+    async def search_conversations_by_message_content(
+        self,
+        *,
+        uid: str,
+        query: str,
+        agent_id: str | None = None,
+        limit: int = 20,
+        offset: int = 0,
+    ) -> tuple[list[dict], bool]:
+        normalized_query = str(query or "").strip()
+        if not normalized_query:
+            return [], False
+
+        conversation_conditions = [
+            Conversation.uid == str(uid),
+            Conversation.status == "active",
+        ]
+        if agent_id:
+            conversation_conditions.append(Conversation.agent_id == agent_id)
+
+        message_conditions = self._message_search_conditions(normalized_query)
+        summary = (
+            select(
+                Message.conversation_id.label("conversation_id"),
+                func.count(Message.id).label("matched_count"),
+                func.max(Message.created_at).label("latest_match_at"),
+            )
+            .join(Conversation, Conversation.id == Message.conversation_id)
+            .where(*conversation_conditions, *message_conditions)
+            .group_by(Message.conversation_id)
+            .subquery()
+        )
+
+        result = await self.db.execute(
+            select(Conversation, summary.c.matched_count, summary.c.latest_match_at)
+            .join(summary, Conversation.id == summary.c.conversation_id)
+            .order_by(summary.c.latest_match_at.desc(), Conversation.updated_at.desc(), Conversation.id.desc())
+            .limit(limit + 1)
+            .offset(offset)
+        )
+        rows = list(result.all())
+        has_more = len(rows) > limit
+        rows = rows[:limit]
+
+        items: list[dict] = []
+        for conversation, matched_count, latest_match_at in rows:
+            snippet_result = await self.db.execute(
+                select(Message.id, Message.content, Message.created_at)
+                .where(Message.conversation_id == conversation.id, *message_conditions)
+                .order_by(Message.created_at.desc(), Message.id.desc())
+                .limit(MESSAGE_SEARCH_SNIPPETS_PER_THREAD)
+            )
+            snippet_rows = list(snippet_result.all())
+            snippets = [
+                {
+                    "message_id": message_id,
+                    "content": self._build_message_search_snippet(content, normalized_query),
+                    "created_at": created_at,
+                }
+                for message_id, content, created_at in snippet_rows
+            ]
+
+            items.append(
+                {
+                    "conversation": conversation,
+                    "matched_count": int(matched_count or 0),
+                    "latest_match_at": latest_match_at,
+                    "message_id": snippets[0]["message_id"] if snippets else None,
+                    "snippets": snippets,
+                }
+            )
+
+        return items, has_more
 
     async def update_conversation(
         self,

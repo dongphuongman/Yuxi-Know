@@ -20,6 +20,16 @@ export const useChatThreadsStore = defineStore('chatThreads', () => {
     currentThreadId.value = threadId || null
   }
 
+  const upsertThread = (thread) => {
+    if (!thread?.id) return
+    const index = threads.value.findIndex((item) => item.id === thread.id)
+    if (index >= 0) {
+      threads.value[index] = { ...threads.value[index], ...thread }
+      return
+    }
+    threads.value = [thread, ...threads.value]
+  }
+
   const loadThreads = async (agentId = null) => {
     try {
       const fetchedThreads = await threadApi.getThreads(agentId, PAGE_SIZE, 0)
@@ -140,6 +150,7 @@ export const useChatThreadsStore = defineStore('chatThreads', () => {
     hasMoreThreads,
     isLoadingMoreThreads,
     setCurrentThreadId,
+    upsertThread,
     loadThreads,
     loadMoreThreads,
     createThread,

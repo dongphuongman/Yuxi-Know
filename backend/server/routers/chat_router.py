@@ -22,6 +22,7 @@ from yuxi.services.conversation_service import (
     list_thread_attachments_view,
     list_threads_view,
     parse_tmp_attachment_view,
+    search_threads_view,
     update_thread_view,
     upload_thread_attachment_view,
     upload_tmp_attachment_view,
@@ -231,6 +232,27 @@ class ThreadResponse(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class ThreadSearchSnippet(BaseModel):
+    message_id: int | None = None
+    content: str
+    created_at: str | None = None
+
+
+class ThreadSearchItem(ThreadResponse):
+    thread_id: str
+    matched_count: int
+    message_id: int | None = None
+    latest_match_at: str | None = None
+    snippets: list[ThreadSearchSnippet] = Field(default_factory=list)
+
+
+class ThreadSearchResponse(BaseModel):
+    items: list[ThreadSearchItem]
+    has_more: bool
+    limit: int
+    offset: int
+
+
 class AttachmentResponse(BaseModel):
     file_id: str
     file_name: str
@@ -369,6 +391,26 @@ async def list_threads(
     """获取用户的所有对话线程 (使用新存储系统)"""
     return await list_threads_view(
         agent_id=agent_id, db=db, current_uid=str(current_user.uid), limit=limit, offset=offset
+    )
+
+
+@chat.get("/threads/search", response_model=ThreadSearchResponse)
+async def search_threads(
+    q: str = Query(..., min_length=1, max_length=200),
+    agent_id: str | None = Query(None),
+    limit: int = Query(20, ge=1, le=50),
+    offset: int = Query(0, ge=0),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_required_user),
+):
+    """搜索当前用户的历史对话。"""
+    return await search_threads_view(
+        query=q,
+        agent_id=agent_id,
+        db=db,
+        current_uid=str(current_user.uid),
+        limit=limit,
+        offset=offset,
     )
 
 
