@@ -177,6 +177,8 @@
                 v-model:open="attachmentUploadModalOpen"
                 :thread-id="currentChatId"
                 :ensure-thread="ensureAttachmentThread"
+                :initial-files="attachmentInitialFiles"
+                :initial-files-key="attachmentInitialFilesKey"
                 @added="handleTmpAttachmentsAdded"
               />
 
@@ -683,6 +685,8 @@ const threadMessages = ref({})
 const threadFilesMap = ref({})
 const threadAttachmentsMap = ref({})
 const attachmentUploadModalOpen = ref(false)
+const attachmentInitialFiles = ref([])
+const attachmentInitialFilesKey = ref(0)
 const isRefreshingState = ref(false)
 const collapsedStateSections = reactive({
   tokenUsage: false,
@@ -2206,7 +2210,7 @@ const ensureActiveThread = async (title = '新的对话') => {
   return null
 }
 
-const handleAttachmentUpload = async () => {
+const handleAttachmentUpload = async (files = []) => {
   if (
     !AgentValidator.validateAgentIdWithError(
       currentAgentId.value,
@@ -2215,6 +2219,12 @@ const handleAttachmentUpload = async () => {
     )
   )
     return
+
+  const droppedFiles = Array.from(files || []).filter((file) => file instanceof File)
+  if (droppedFiles.length) {
+    attachmentInitialFiles.value = droppedFiles
+    attachmentInitialFilesKey.value += 1
+  }
 
   attachmentUploadModalOpen.value = true
 }

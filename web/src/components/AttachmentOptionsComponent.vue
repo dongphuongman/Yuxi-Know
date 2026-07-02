@@ -23,7 +23,7 @@
 <script setup>
 import { FileText, Image } from 'lucide-vue-next'
 import { message } from 'ant-design-vue'
-import { multimodalApi } from '@/apis/agent_api'
+import { uploadMultimodalImage } from '@/utils/multimodal_image_upload'
 
 const props = defineProps({
   disabled: {
@@ -67,50 +67,14 @@ const handleImageUpload = () => {
 // 处理图片上传逻辑
 const processImageUpload = async (file) => {
   try {
-    // 验证文件大小（10MB）
-    if (file.size > 10 * 1024 * 1024) {
-      message.error('图片文件过大，请选择小于10MB的图片')
-      return
-    }
+    const imageData = await uploadMultimodalImage(file)
+    if (!imageData) return
 
-    // 验证文件类型
-    if (!file.type.startsWith('image/')) {
-      message.error('请选择有效的图片文件')
-      return
-    }
+    // 发出上传成功事件，包含处理后的图片数据
+    emit('upload-image', imageData)
 
-    message.loading({ content: '正在处理图片...', key: 'image-upload' })
-
-    const result = await multimodalApi.uploadImage(file)
-
-    if (result.success) {
-      message.success({
-        content: '图片处理成功',
-        key: 'image-upload',
-        duration: 2
-      })
-
-      // 发出上传成功事件，包含处理后的图片数据
-      emit('upload-image', {
-        success: true,
-        imageContent: result.image_content,
-        thumbnailContent: result.thumbnail_content,
-        width: result.width,
-        height: result.height,
-        format: result.format,
-        mimeType: result.mime_type || file.type,
-        sizeBytes: result.size_bytes,
-        originalName: file.name
-      })
-
-      // 发出上传成功通知事件，用于关闭选项面板
-      emit('upload-image-success')
-    } else {
-      message.error({
-        content: `图片处理失败: ${result.error}`,
-        key: 'image-upload'
-      })
-    }
+    // 发出上传成功通知事件，用于关闭选项面板
+    emit('upload-image-success')
   } catch (error) {
     console.error('图片上传失败:', error)
     message.error({

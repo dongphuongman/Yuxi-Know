@@ -1,5 +1,13 @@
 <template>
-  <div class="input-box" :class="customClasses" @click="focusInput">
+  <div
+    class="input-box"
+    :class="[customClasses, { 'dragging-files': isDraggingFiles }]"
+    @click="focusInput"
+    @dragenter="handleDragEnter"
+    @dragover="handleDragOver"
+    @dragleave="handleDragLeave"
+    @drop="handleDrop"
+  >
     <div class="top-slot">
       <slot name="top"></slot>
     </div>
@@ -355,10 +363,14 @@ const props = defineProps({
   threadId: {
     type: String,
     default: ''
+  },
+  fileUploadEnabled: {
+    type: Boolean,
+    default: false
   }
 })
 
-const emit = defineEmits(['update:modelValue', 'send', 'keydown'])
+const emit = defineEmits(['update:modelValue', 'send', 'keydown', 'paste-image', 'drop-files'])
 const slots = useSlots()
 
 // @ 提及功能是否启用
@@ -1017,6 +1029,25 @@ const inputValue = computed({
   set: (val) => emit('update:modelValue', val)
 })
 
+const isDraggingFiles = ref(false)
+
+const hasTransferFiles = (dataTransfer) =>
+  Array.from(dataTransfer?.types || []).some((type) => type === 'Files')
+
+const canAcceptUploadFiles = () => props.fileUploadEnabled && !props.disabled && !props.isLoading
+
+const getImageFileFromClipboard = (clipboardData) => {
+  const items = Array.from(clipboardData?.items || [])
+  for (const item of items) {
+    if (item.kind === 'file' && item.type?.startsWith('image/')) {
+      const file = item.getAsFile()
+      if (file) return file
+    }
+  }
+
+  return Array.from(clipboardData?.files || []).find((file) => file.type?.startsWith('image/'))
+}
+
 const handleMentionDeletion = (e) => {
   if (e.key !== 'Backspace' && e.key !== 'Delete') return false
 
@@ -1099,9 +1130,51 @@ const handleInput = () => {
 }
 
 const handlePaste = (e) => {
+  if (props.disabled) return
+
+  const imageFile = canAcceptUploadFiles() ? getImageFileFromClipboard(e.clipboardData) : null
+  if (imageFile) {
+    e.preventDefault()
+    emit('paste-image', imageFile)
+    return
+  }
+
   e.preventDefault()
   const text = e.clipboardData?.getData('text/plain') || ''
+  if (!text) return
   replaceCurrentRawSelection(text)
+}
+
+const handleDragEnter = (e) => {
+  if (!hasTransferFiles(e.dataTransfer)) return
+  e.preventDefault()
+  if (!canAcceptUploadFiles()) return
+  isDraggingFiles.value = true
+}
+
+const handleDragOver = (e) => {
+  if (!hasTransferFiles(e.dataTransfer)) return
+  e.preventDefault()
+  e.dataTransfer.dropEffect = canAcceptUploadFiles() ? 'copy' : 'none'
+  if (!canAcceptUploadFiles()) return
+  isDraggingFiles.value = true
+}
+
+const handleDragLeave = (e) => {
+  if (e.currentTarget?.contains(e.relatedTarget)) return
+  isDraggingFiles.value = false
+}
+
+const handleDrop = (e) => {
+  if (!hasTransferFiles(e.dataTransfer)) return
+  e.preventDefault()
+  e.stopPropagation()
+  isDraggingFiles.value = false
+  if (!canAcceptUploadFiles()) return
+  const files = Array.from(e.dataTransfer?.files || [])
+  if (!files.length) return
+
+  emit('drop-files', files)
 }
 
 const handleCompositionStart = () => {
@@ -1199,6 +1272,7 @@ onBeforeUnmount(() => {
   if (activeAbortController) {
     activeAbortController.abort()
   }
+  isDraggingFiles.value = false
   document.removeEventListener('click', closeMentionPopup)
 })
 
@@ -1264,6 +1338,28 @@ defineExpose({
   //   background: var(--gray-0);
   //   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
   // }
+
+  &.dragging-files {
+    border-color: var(--main-color);
+    background: var(--main-10);
+
+    &::after {
+      content: '释放以上传附件';
+      position: absolute;
+      inset: 6px;
+      z-index: 5;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border: 1px dashed var(--main-color);
+      border-radius: 10px;
+      color: var(--main-700);
+      background: color-mix(in srgb, var(--gray-0) 88%, transparent);
+      font-size: 13px;
+      font-weight: 600;
+      pointer-events: none;
+    }
+  }
 }
 
 .expand-options {

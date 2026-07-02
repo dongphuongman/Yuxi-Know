@@ -9,8 +9,11 @@
     :placeholder="placeholder"
     :mention="mention"
     :thread-id="threadId"
+    :file-upload-enabled="supportsFileUpload"
     @send="handleSend"
     @keydown="handleKeyDown"
+    @paste-image="handlePastedImage"
+    @drop-files="handleDroppedFiles"
   >
     <template #top>
       <div v-if="currentImage || previewAttachments.length" class="input-top-stack">
@@ -75,6 +78,7 @@ import ImagePreviewComponent from '@/components/ImagePreviewComponent.vue'
 import AttachmentOptionsComponent from '@/components/AttachmentOptionsComponent.vue'
 import { X } from 'lucide-vue-next'
 import { normalizeAttachmentPreviews } from '@/utils/file_utils'
+import { uploadMultimodalImage } from '@/utils/multimodal_image_upload'
 import FileTypeIcon from '@/components/common/FileTypeIcon.vue'
 
 const props = defineProps({
@@ -117,6 +121,22 @@ const handleImageUpload = (imageData) => {
   if (imageData && imageData.success) {
     currentImage.value = imageData
   }
+}
+
+const handlePastedImage = async (file) => {
+  if (props.disabled || !props.supportsFileUpload) return
+
+  try {
+    const imageData = await uploadMultimodalImage(file)
+    handleImageUpload(imageData)
+  } catch (error) {
+    console.error('图片上传失败:', error)
+  }
+}
+
+const handleDroppedFiles = (files = []) => {
+  if (props.disabled || !props.supportsFileUpload || !files.length) return
+  handleAttachmentUpload(files)
 }
 
 const handleImageUploadSuccess = () => {

@@ -164,7 +164,9 @@ import FileTypeIcon from '@/components/common/FileTypeIcon.vue'
 const props = defineProps({
   open: { type: Boolean, default: false },
   threadId: { type: String, default: '' },
-  ensureThread: { type: Function, default: null }
+  ensureThread: { type: Function, default: null },
+  initialFiles: { type: Array, default: () => [] },
+  initialFilesKey: { type: Number, default: 0 }
 })
 
 const emit = defineEmits(['update:open', 'added'])
@@ -174,6 +176,7 @@ const DEFAULT_OCR_ENGINE = 'rapid_ocr'
 const fileItems = ref([])
 const confirming = ref(false)
 let localIdSeed = 0
+let consumedInitialFilesKey = 0
 
 const methodLabels = {
   disable: 'PDF 文本提取',
@@ -332,6 +335,26 @@ const handleBeforeUpload = (file) => {
   void uploadFile(file)
   return false
 }
+
+const uploadInitialFiles = () => {
+  if (!props.open || !props.initialFilesKey) return
+  if (props.initialFilesKey === consumedInitialFilesKey) return
+
+  consumedInitialFilesKey = props.initialFilesKey
+  Array.from(props.initialFiles || [])
+    .filter((file) => file instanceof File)
+    .forEach((file) => {
+      void uploadFile(file)
+    })
+}
+
+watch(
+  () => [props.open, props.initialFilesKey],
+  () => {
+    uploadInitialFiles()
+  },
+  { flush: 'post' }
+)
 
 const getMethodStatus = (method) => {
   if (method === 'disable') return 'local'
