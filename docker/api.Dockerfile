@@ -52,7 +52,7 @@ COPY backend/uv.lock /app/uv.lock
 COPY backend/package /app/package
 
 # 如果网络还是不好，可以在后面添加 --index-url https://pypi.tuna.tsinghua.edu.cn/simple
-RUN uv sync --group test --no-dev --frozen
+RUN uv sync --no-cache --group test --no-dev --frozen
 
 # 复制 server 代码
 COPY backend/server /app/server
