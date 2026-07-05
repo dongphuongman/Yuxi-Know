@@ -16,229 +16,235 @@
       @success="onFileUploadSuccess"
     />
 
-    <div class="detail-top-bar">
-      <button class="detail-back-btn" type="button" @click="backToDatabase">
-        <ArrowLeft :size="16" />
-        <span>返回</span>
-      </button>
-      <div class="detail-title-area">
-        <div class="detail-icon">
-          <component :is="kbTypeIcon" :size="18" />
-        </div>
-        <div class="detail-title-text">
-          <h2>{{ database.name || '知识库加载中' }}</h2>
-          <span class="detail-subtitle">{{ databaseSubtitle }}</span>
-        </div>
-      </div>
-      <div class="detail-actions">
-        <a-space :size="8">
-          <button
-            type="button"
-            class="lucide-icon-btn extension-panel-action extension-panel-action-secondary"
-            @click="copyDatabaseId"
-          >
-            <Copy :size="14" />
-            <span>复制 ID</span>
-          </button>
-          <button
-            type="button"
-            class="lucide-icon-btn extension-panel-action extension-panel-action-primary"
-            @click="showEditModal"
-          >
-            <Pencil :size="14" />
-            <span>编辑</span>
-          </button>
-        </a-space>
-      </div>
+    <div v-if="detailLoading" class="database-detail-loading">
+      <a-spin tip="加载知识库信息..." />
     </div>
 
-    <div class="database-detail-body">
-      <div class="database-tab-bar" aria-label="知识库功能导航">
-        <nav class="database-tab-list" aria-label="知识库功能标签" role="tablist">
-          <button
-            v-for="tab in visibleTabs"
-            :key="tab.key"
-            type="button"
-            class="database-tab-item"
-            :class="{ active: activeTab === tab.key }"
-            role="tab"
-            :aria-selected="activeTab === tab.key"
-            @click="activeTab = tab.key"
-          >
-            <component :is="tab.icon" :size="17" />
-            <span>{{ tab.label }}</span>
-          </button>
-        </nav>
+    <template v-else>
+      <div class="detail-top-bar">
+        <button class="detail-back-btn" type="button" @click="backToDatabase">
+          <ArrowLeft :size="16" />
+          <span>返回</span>
+        </button>
+        <div class="detail-title-area">
+          <div class="detail-icon">
+            <component :is="kbTypeIcon" :size="18" />
+          </div>
+          <div class="detail-title-text">
+            <h2>{{ database.name || '知识库加载中' }}</h2>
+            <span class="detail-subtitle">{{ databaseSubtitle }}</span>
+          </div>
+        </div>
+        <div class="detail-actions">
+          <a-space :size="8">
+            <button
+              type="button"
+              class="lucide-icon-btn extension-panel-action extension-panel-action-secondary"
+              @click="copyDatabaseId"
+            >
+              <Copy :size="14" />
+              <span>复制 ID</span>
+            </button>
+            <button
+              type="button"
+              class="lucide-icon-btn extension-panel-action extension-panel-action-primary"
+              @click="showEditModal"
+            >
+              <Pencil :size="14" />
+              <span>编辑</span>
+            </button>
+          </a-space>
+        </div>
       </div>
 
-      <main class="database-tab-content">
-        <div v-if="isMilvus" v-show="activeTab === 'filetable'" class="tab-panel file-panel">
-          <div class="file-management-info">
-            <div class="file-info-title">
-              <div class="file-info-title-row">
-                <button
-                  type="button"
-                  class="lucide-icon-btn extension-panel-action extension-panel-action-primary"
-                  @click="showAddFilesModal()"
-                >
-                  <FileUp :size="14" />
-                  <span>上传</span>
-                </button>
-                <button
-                  type="button"
-                  class="lucide-icon-btn extension-panel-action extension-panel-action-secondary"
-                  @click="showCreateFolderModal"
-                >
-                  <FolderPlus :size="14" />
-                  <span>新建文件夹</span>
-                </button>
-              </div>
-            </div>
-            <div class="file-panel-status">
-              <button
-                v-if="pendingParseCount > 0"
-                type="button"
-                class="file-stat-card file-stat-action file-stat-summary"
-                :disabled="store.state.chunkLoading"
-                @click="confirmBatchParse"
-              >
-                <FileText :size="16" />
-                <div class="file-stat-inline">
-                  <strong>{{ pendingParseCount }}</strong>
-                  <span>待解析</span>
-                </div>
-              </button>
-              <button
-                v-if="pendingIndexCount > 0"
-                type="button"
-                class="file-stat-card file-stat-action file-stat-summary"
-                :disabled="store.state.chunkLoading"
-                @click="confirmBatchIndex"
-              >
-                <DatabaseIcon :size="16" />
-                <div class="file-stat-inline">
-                  <strong>{{ pendingIndexCount }}</strong>
-                  <span>待入库</span>
-                </div>
-              </button>
-              <div class="file-stat-card file-stat-summary">
-                <FileText :size="16" />
-                <div class="file-stat-inline">
-                  <strong>{{ fileStats.count }}</strong>
-                  <span>文件</span>
-                </div>
-              </div>
-              <div v-if="fileStats.sizeText" class="file-stat-card file-stat-summary">
-                <DatabaseIcon :size="16" />
-                <div class="file-stat-inline">
-                  <strong>{{ fileStats.sizeText }}</strong>
-                  <span>总大小</span>
-                </div>
-              </div>
-              <button
-                type="button"
-                class="file-stat-card file-stat-summary file-stat-repair"
-                :disabled="statsRepairing"
-                :aria-busy="statsRepairing"
-                aria-label="修复缺失的 Chunk/Token 统计"
-                title="修复缺失的 Chunk/Token 统计"
-                @click="repairDatabaseStats"
-              >
-                <LoaderCircle v-if="statsRepairing" :size="16" class="file-stat-spinner" />
-                <DatabaseIcon v-else :size="16" />
-                <div class="file-stat-inline">
-                  <strong>{{ fileStats.chunkText }}</strong>
-                  <span>Chunks</span>
-                </div>
-              </button>
-              <button
-                type="button"
-                class="file-stat-card file-stat-summary file-stat-repair"
-                :disabled="statsRepairing"
-                :aria-busy="statsRepairing"
-                aria-label="修复缺失的 Chunk/Token 统计"
-                title="修复缺失的 Chunk/Token 统计"
-                @click="repairDatabaseStats"
-              >
-                <LoaderCircle v-if="statsRepairing" :size="16" class="file-stat-spinner" />
-                <Hash v-else :size="16" />
-                <div class="file-stat-inline">
-                  <strong>{{ fileStats.tokenText }}</strong>
-                  <span>Tokens</span>
-                </div>
-              </button>
-            </div>
-          </div>
-          <FileTable ref="fileTableRef" />
+      <div class="database-detail-body">
+        <div class="database-tab-bar" aria-label="知识库功能导航">
+          <nav class="database-tab-list" aria-label="知识库功能标签" role="tablist">
+            <button
+              v-for="tab in visibleTabs"
+              :key="tab.key"
+              type="button"
+              class="database-tab-item"
+              :class="{ active: activeTab === tab.key }"
+              role="tab"
+              :aria-selected="activeTab === tab.key"
+              @click="activeTab = tab.key"
+            >
+              <component :is="tab.icon" :size="17" />
+              <span>{{ tab.label }}</span>
+            </button>
+          </nav>
         </div>
 
-        <div v-show="activeTab === 'query'" class="tab-panel query-config-panel">
-          <div class="query-config-layout">
-            <div class="query-test-pane">
-              <QuerySection ref="querySectionRef" :visible="true" @toggle-visible="() => {}" />
-            </div>
-            <aside class="query-config-pane" aria-label="检索配置">
-              <div class="search-config-wrapper">
-                <div class="search-config-header">
-                  <div>
-                    <h3>检索配置</h3>
-                    <p>调整当前知识库的检索参数。</p>
-                  </div>
+        <main class="database-tab-content">
+          <div v-if="isMilvus" v-show="activeTab === 'filetable'" class="tab-panel file-panel">
+            <div class="file-management-info">
+              <div class="file-info-title">
+                <div class="file-info-title-row">
                   <button
                     type="button"
                     class="lucide-icon-btn extension-panel-action extension-panel-action-primary"
-                    :disabled="searchConfigSaving"
-                    @click="handleInlineSearchConfigSave"
+                    @click="showAddFilesModal()"
                   >
-                    <Save :size="14" />
-                    <span>保存</span>
+                    <FileUp :size="14" />
+                    <span>上传</span>
+                  </button>
+                  <button
+                    type="button"
+                    class="lucide-icon-btn extension-panel-action extension-panel-action-secondary"
+                    @click="showCreateFolderModal"
+                  >
+                    <FolderPlus :size="14" />
+                    <span>新建文件夹</span>
                   </button>
                 </div>
-                <div class="search-config-body">
-                  <SearchConfigPanel
-                    ref="searchConfigPanelRef"
-                    :kb-id="kbId"
-                    @save="handleSearchConfigSave"
-                  />
-                </div>
               </div>
-            </aside>
+              <div class="file-panel-status">
+                <button
+                  v-if="pendingParseCount > 0"
+                  type="button"
+                  class="file-stat-card file-stat-action file-stat-summary"
+                  :disabled="store.state.chunkLoading"
+                  @click="confirmBatchParse"
+                >
+                  <FileText :size="16" />
+                  <div class="file-stat-inline">
+                    <strong>{{ pendingParseCount }}</strong>
+                    <span>待解析</span>
+                  </div>
+                </button>
+                <button
+                  v-if="pendingIndexCount > 0"
+                  type="button"
+                  class="file-stat-card file-stat-action file-stat-summary"
+                  :disabled="store.state.chunkLoading"
+                  @click="confirmBatchIndex"
+                >
+                  <DatabaseIcon :size="16" />
+                  <div class="file-stat-inline">
+                    <strong>{{ pendingIndexCount }}</strong>
+                    <span>待入库</span>
+                  </div>
+                </button>
+                <div class="file-stat-card file-stat-summary">
+                  <FileText :size="16" />
+                  <div class="file-stat-inline">
+                    <strong>{{ fileStats.count }}</strong>
+                    <span>文件</span>
+                  </div>
+                </div>
+                <div v-if="fileStats.sizeText" class="file-stat-card file-stat-summary">
+                  <DatabaseIcon :size="16" />
+                  <div class="file-stat-inline">
+                    <strong>{{ fileStats.sizeText }}</strong>
+                    <span>总大小</span>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  class="file-stat-card file-stat-summary file-stat-repair"
+                  :disabled="statsRepairing"
+                  :aria-busy="statsRepairing"
+                  aria-label="修复缺失的 Chunk/Token 统计"
+                  title="修复缺失的 Chunk/Token 统计"
+                  @click="repairDatabaseStats"
+                >
+                  <LoaderCircle v-if="statsRepairing" :size="16" class="file-stat-spinner" />
+                  <DatabaseIcon v-else :size="16" />
+                  <div class="file-stat-inline">
+                    <strong>{{ fileStats.chunkText }}</strong>
+                    <span>Chunks</span>
+                  </div>
+                </button>
+                <button
+                  type="button"
+                  class="file-stat-card file-stat-summary file-stat-repair"
+                  :disabled="statsRepairing"
+                  :aria-busy="statsRepairing"
+                  aria-label="修复缺失的 Chunk/Token 统计"
+                  title="修复缺失的 Chunk/Token 统计"
+                  @click="repairDatabaseStats"
+                >
+                  <LoaderCircle v-if="statsRepairing" :size="16" class="file-stat-spinner" />
+                  <Hash v-else :size="16" />
+                  <div class="file-stat-inline">
+                    <strong>{{ fileStats.tokenText }}</strong>
+                    <span>Tokens</span>
+                  </div>
+                </button>
+              </div>
+            </div>
+            <FileTable ref="fileTableRef" />
           </div>
-        </div>
 
-        <div v-if="isMilvus && activeTab === 'graph'" class="tab-panel">
-          <KnowledgeGraphSection
-            :visible="true"
-            :active="activeTab === 'graph'"
-            @toggle-visible="() => {}"
-          />
-        </div>
-
-        <div v-if="isMilvus && activeTab === 'mindmap'" class="tab-panel">
-          <MindMapSection v-if="kbId" :kb-id="kbId" ref="mindmapSectionRef" />
-        </div>
-
-        <div v-if="isMilvus && activeTab === 'evaluation'" class="tab-panel">
-          <RAGEvaluationTab
-            v-if="kbId"
-            :kb-id="kbId"
-            @switch-to-benchmarks="activeTab = 'benchmarks'"
-          />
-        </div>
-
-        <div v-if="isMilvus && activeTab === 'benchmarks'" class="tab-panel">
-          <div class="benchmark-management-container">
-            <div class="benchmark-content">
-              <EvaluationBenchmarks
-                v-if="kbId && isEvaluationSupported"
-                :kb-id="kbId"
-                @benchmark-selected="activeTab = 'evaluation'"
-              />
+          <div v-show="activeTab === 'query'" class="tab-panel query-config-panel">
+            <div class="query-config-layout">
+              <div class="query-test-pane">
+                <QuerySection ref="querySectionRef" :visible="true" @toggle-visible="() => {}" />
+              </div>
+              <aside class="query-config-pane" aria-label="检索配置">
+                <div class="search-config-wrapper">
+                  <div class="search-config-header">
+                    <div>
+                      <h3>检索配置</h3>
+                      <p>调整当前知识库的检索参数。</p>
+                    </div>
+                    <button
+                      type="button"
+                      class="lucide-icon-btn extension-panel-action extension-panel-action-primary"
+                      :disabled="searchConfigSaving"
+                      @click="handleInlineSearchConfigSave"
+                    >
+                      <Save :size="14" />
+                      <span>保存</span>
+                    </button>
+                  </div>
+                  <div class="search-config-body">
+                    <SearchConfigPanel
+                      ref="searchConfigPanelRef"
+                      :kb-id="kbId"
+                      @save="handleSearchConfigSave"
+                    />
+                  </div>
+                </div>
+              </aside>
             </div>
           </div>
-        </div>
-      </main>
-    </div>
+
+          <div v-if="isMilvus && activeTab === 'graph'" class="tab-panel">
+            <KnowledgeGraphSection
+              :visible="true"
+              :active="activeTab === 'graph'"
+              @toggle-visible="() => {}"
+            />
+          </div>
+
+          <div v-if="isMilvus && activeTab === 'mindmap'" class="tab-panel">
+            <MindMapSection v-if="kbId" :kb-id="kbId" ref="mindmapSectionRef" />
+          </div>
+
+          <div v-if="isMilvus && activeTab === 'evaluation'" class="tab-panel">
+            <RAGEvaluationTab
+              v-if="kbId"
+              :kb-id="kbId"
+              @switch-to-benchmarks="activeTab = 'benchmarks'"
+            />
+          </div>
+
+          <div v-if="isMilvus && activeTab === 'benchmarks'" class="tab-panel">
+            <div class="benchmark-management-container">
+              <div class="benchmark-content">
+                <EvaluationBenchmarks
+                  v-if="kbId && isEvaluationSupported"
+                  :kb-id="kbId"
+                  @benchmark-selected="activeTab = 'evaluation'"
+                />
+              </div>
+            </div>
+          </div>
+        </main>
+      </div>
+    </template>
 
     <a-modal v-model:open="editModalVisible" title="编辑知识库信息" width="700px">
       <template #footer>
@@ -589,6 +595,7 @@ const currentFolderId = ref(null)
 const isFolderUploadMode = ref(false)
 const addFilesMode = ref('file')
 const isInitialLoad = ref(true)
+const detailLoading = ref(true)
 const fileTableRef = ref(null)
 
 const showAddFilesModal = (options = {}) => {
@@ -636,11 +643,16 @@ watch(
   () => route.params.kbId,
   async (nextKbId) => {
     isInitialLoad.value = true
+    detailLoading.value = true
     store.kbId = nextKbId
     resetFileSelectionState()
     store.stopAutoRefresh()
-    await store.getDatabaseInfo(nextKbId, false)
-    store.startAutoRefresh()
+    try {
+      await store.getDatabaseInfo(nextKbId, false)
+      store.startAutoRefresh()
+    } finally {
+      detailLoading.value = false
+    }
   },
   { immediate: true }
 )
@@ -921,6 +933,15 @@ onMounted(() => {
   flex-direction: column;
   background: var(--gray-10);
   overflow: hidden;
+}
+
+.database-detail-loading {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--gray-10);
 }
 
 .database-tab-bar {

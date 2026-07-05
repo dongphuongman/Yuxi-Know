@@ -452,7 +452,7 @@ defineExpose({
   .share-mode-cards {
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 8px;
+    gap: 10px;
     align-items: stretch;
 
     @media (max-width: 768px) {
@@ -473,12 +473,12 @@ defineExpose({
     position: relative;
     display: flex;
     min-width: 0;
-    min-height: 76px;
+    min-height: 82px;
     flex-direction: column;
     gap: 10px;
-    padding: 12px;
+    padding: 14px;
     border: 1px solid var(--gray-200);
-    border-radius: 12px;
+    border-radius: 10px;
     background: var(--gray-0);
     cursor: pointer;
     transition:
@@ -490,6 +490,7 @@ defineExpose({
     &:hover,
     &:focus-visible {
       border-color: var(--main-color);
+      background: var(--main-10);
     }
 
     &:focus-visible {
@@ -499,10 +500,8 @@ defineExpose({
 
     &.active {
       border-color: var(--main-color);
-      background: linear-gradient(180deg, var(--main-10) 0%, var(--gray-0) 100%);
-      box-shadow:
-        0 0 0 1px var(--main-10),
-        0 5px 12px rgb(0 0 0 / 6%);
+      background: var(--main-10);
+      box-shadow: 0 0 0 1px var(--main-10);
     }
   }
 
@@ -535,8 +534,8 @@ defineExpose({
     width: 36px;
     height: 36px;
     flex-shrink: 0;
-    border-radius: 10px;
-    background: var(--gray-50);
+    border-radius: 9px;
+    background: var(--gray-25);
     transition:
       background-color 180ms ease,
       box-shadow 180ms ease;
@@ -549,7 +548,7 @@ defineExpose({
 
   .share-mode-card.active .card-icon-wrapper {
     background: var(--main-0);
-    box-shadow: inset 0 0 0 1px var(--main-10);
+    box-shadow: inset 0 0 0 1px var(--main-100);
   }
 
   .share-mode-card.active .card-icon {

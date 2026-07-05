@@ -301,7 +301,9 @@ defineExpose({
         <span class="agent-modal-title">{{ agentModalTitle }}</span>
         <div class="agent-modal-actions">
           <a-button :disabled="saving" @click="closeAgentModal">取消</a-button>
-          <a-button type="primary" :loading="saving" @click="saveAgent">保存</a-button>
+          <a-button type="primary" :loading="saving" @click="saveAgent">
+            {{ agentStore.hasConfigChanges ? '保存（有修改）' : '保存' }}
+          </a-button>
         </div>
       </div>
     </template>
@@ -413,7 +415,12 @@ defineExpose({
           <div class="modal-form">
             <label class="form-label full-width">
               <span>描述</span>
-              <a-textarea v-model:value="agentForm.description" :rows="3" placeholder="可选" />
+              <a-textarea
+                v-model:value="agentForm.description"
+                class="agent-description-textarea"
+                :rows="3"
+                placeholder="可选"
+              />
             </label>
           </div>
 
@@ -435,9 +442,6 @@ defineExpose({
           v-show="isRuntimeAgentModalTab(agentModalActiveTab)"
           class="agent-modal-section runtime-section"
         >
-          <div v-if="agentStore.hasConfigChanges" class="runtime-dirty-row">
-            <span class="dirty-hint">有未保存修改</span>
-          </div>
           <AgentRuntimeConfigForm
             ref="runtimeConfigFormRef"
             :segment="runtimeConfigSegment"
@@ -470,7 +474,8 @@ defineExpose({
   gap: 8px;
 
   :deep(.ant-btn) {
-    min-width: 64px;
+    min-width: 70px;
+    height: 36px;
     border-radius: 8px;
     font-weight: 500;
   }
@@ -493,8 +498,6 @@ defineExpose({
   height: min(72vh, 640px);
   min-height: 0;
   overflow: hidden;
-  border: 1px solid var(--gray-150);
-  border-radius: 8px;
   background: var(--gray-0);
 
   &.without-sidebar {
@@ -502,20 +505,20 @@ defineExpose({
   }
 
   &.create-mode {
-    border-color: var(--gray-300);
-    box-shadow: 0 10px 28px var(--shadow-1);
+    height: auto;
+    min-height: 360px;
   }
 }
 
 .agent-modal-sidebar {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 4px;
   min-height: 0;
-  padding: 12px 8px;
+  padding: 14px 10px;
   overflow-y: auto;
   border-right: 1px solid var(--gray-150);
-  background: linear-gradient(180deg, var(--gray-50), var(--main-10));
+  background: transparent;
 }
 
 .agent-modal-nav-item {
@@ -523,8 +526,8 @@ defineExpose({
   align-items: center;
   justify-content: space-between;
   width: 100%;
-  min-height: 34px;
-  padding: 7px 9px;
+  min-height: 38px;
+  padding: 8px 10px;
   border: 1px solid transparent;
   border-radius: 7px;
   background: transparent;
@@ -539,7 +542,7 @@ defineExpose({
     color 0.16s ease;
 
   &:hover {
-    background: var(--gray-0);
+    background: var(--gray-50);
     color: var(--gray-900);
   }
 
@@ -550,7 +553,7 @@ defineExpose({
   }
 
   &.active {
-    background: var(--gray-0);
+    background: var(--main-30);
     color: var(--main-800);
 
     span {
@@ -585,8 +588,32 @@ defineExpose({
 .agent-modal-main {
   min-width: 0;
   min-height: 0;
-  overflow-y: auto;
-  padding: 18px 20px 20px;
+  overflow: hidden auto;
+  overscroll-behavior: contain;
+  padding: 22px 18px 24px 24px;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: var(--gray-300) transparent;
+
+  &::-webkit-scrollbar {
+    width: 6px;
+  }
+
+  &::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  &::-webkit-scrollbar-thumb {
+    border: 2px solid transparent;
+    border-radius: 999px;
+    background: var(--gray-300);
+    background-clip: content-box;
+  }
+
+  &::-webkit-scrollbar-thumb:hover {
+    background: var(--gray-400);
+    background-clip: content-box;
+  }
 }
 
 .agent-modal-section {
@@ -597,8 +624,7 @@ defineExpose({
 .runtime-section {
   display: flex;
   flex-direction: column;
-  height: 100%;
-  min-height: 0;
+  min-height: 100%;
 
   :deep(.agent-runtime-config-form) {
     display: flex;
@@ -613,7 +639,7 @@ defineExpose({
     min-width: 0;
     min-height: 0;
     padding: 0;
-    overflow-y: auto;
+    overflow: visible;
   }
 }
 
@@ -661,7 +687,7 @@ defineExpose({
   overflow: hidden;
   border: 1px solid var(--gray-200);
   border-radius: 12px;
-  background: var(--gray-25);
+  background: var(--main-30);
   cursor: pointer;
   transition:
     border-color 0.16s ease,
@@ -795,7 +821,7 @@ defineExpose({
   padding: 10px 12px;
   border: 1px solid var(--gray-200);
   border-radius: 12px;
-  background: var(--gray-25);
+  background: var(--gray-10);
   color: var(--gray-700);
 
   &.editable {
@@ -860,21 +886,9 @@ defineExpose({
 }
 
 .share-config-block {
-  margin-top: 18px;
-  padding-top: 16px;
+  margin-top: 22px;
+  padding-top: 18px;
   border-top: 1px solid var(--gray-150);
-}
-
-.runtime-dirty-row {
-  display: flex;
-  justify-content: flex-end;
-  margin-bottom: 10px;
-}
-
-.dirty-hint {
-  color: var(--color-warning-700);
-  font-size: 12px;
-  font-weight: 500;
 }
 
 .modal-form {
@@ -892,6 +906,37 @@ defineExpose({
     color: var(--gray-700);
     font-size: 12px;
     font-weight: 500;
+  }
+}
+
+.agent-description-textarea {
+  min-height: 80px;
+  padding: 10px 12px;
+  border-color: var(--gray-200);
+  border-radius: 8px;
+  background: var(--gray-10);
+  color: var(--gray-900);
+  font-size: 13px;
+  line-height: 1.6;
+  resize: vertical;
+  transition:
+    border-color 0.16s ease,
+    background 0.16s ease,
+    box-shadow 0.16s ease;
+
+  &::placeholder {
+    color: var(--gray-400);
+  }
+
+  &:hover {
+    border-color: var(--gray-300);
+    background: var(--gray-0);
+  }
+
+  &:focus {
+    border-color: var(--main-300);
+    background: var(--gray-0);
+    box-shadow: 0 0 0 3px var(--main-50);
   }
 }
 
@@ -924,5 +969,26 @@ defineExpose({
     border-right: 0;
     border-bottom: 1px solid var(--gray-150);
   }
+}
+
+:global(.agent-edit-modal .ant-modal-content) {
+  overflow: hidden;
+  padding: 0;
+  border-radius: 12px;
+}
+
+:global(.agent-edit-modal .ant-modal-header) {
+  margin: 0;
+  padding: 18px 24px;
+  border-bottom: 1px solid var(--gray-150);
+  background: var(--gray-0);
+}
+
+:global(.agent-edit-modal .ant-modal-title) {
+  width: 100%;
+}
+
+:global(.agent-edit-modal .ant-modal-body) {
+  padding: 0;
 }
 </style>

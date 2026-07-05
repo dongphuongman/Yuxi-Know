@@ -1,7 +1,16 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
 import { message, Modal } from 'ant-design-vue'
-import { Plus, RefreshCw, Trash2, SquarePen, Bot, MoreVertical } from 'lucide-vue-next'
+import {
+  Plus,
+  RefreshCw,
+  Trash2,
+  SquarePen,
+  Bot,
+  MoreVertical,
+  MessageCirclePlus
+} from 'lucide-vue-next'
+import { useRouter } from 'vue-router'
 
 import { agentApi } from '@/apis/agent_api'
 import AgentEditModal from '@/components/model-management/AgentEditModal.vue'
@@ -13,6 +22,7 @@ import ExtensionCardGrid from '@/components/extensions/ExtensionCardGrid.vue'
 import { generatePixelAvatar } from '@/utils/pixelAvatar'
 
 const agentStore = useAgentStore()
+const router = useRouter()
 const agentLoading = ref(false)
 const searchQuery = ref('')
 
@@ -68,10 +78,6 @@ const agentStats = computed(() => ({
 }))
 const canManageAgent = (agent) => !!agent?.can_manage
 const getAgentDefaultIconSrc = (agent) => (agent.id ? generatePixelAvatar(agent.id) : '')
-const getAgentTags = (agent) => [
-  ...(!agent?.can_manage ? [{ name: '只读', color: 'default' }] : []),
-  ...(agent?.backend_id ? [{ name: agent.backend_id, color: 'blue' }] : [])
-]
 
 // ============ Agent Operations ============
 const loadAgentBackends = async () => {
@@ -105,6 +111,11 @@ const openCreateAgentModal = () => {
 const openEditAgentModal = (agent) => {
   if (!canManageAgent(agent)) return
   agentEditModalRef.value?.openEdit(agent)
+}
+
+const openAgentChat = (agent) => {
+  if (!agent?.id || agent.is_subagent) return
+  router.push({ name: 'AgentComp', query: { agent_id: agent.id } })
 }
 
 const refreshAgentLists = async () => {
@@ -176,7 +187,7 @@ defineExpose({
             :subtitle="agent.slug || agent.id"
             :description="agent.description || '暂无描述'"
             :default-icon="Bot"
-            :tags="getAgentTags(agent)"
+            :tags="[]"
             class="config-card agent-card"
             @click="canManageAgent(agent) && openEditAgentModal(agent)"
           >
@@ -230,6 +241,20 @@ defineExpose({
                 </a-button>
               </a-dropdown>
             </template>
+
+            <template v-if="group.key === 'agents'" #tags>
+              <div class="agent-card-actions">
+                <a-button
+                  type="primary"
+                  size="small"
+                  class="lucide-icon-btn agent-chat-entry"
+                  @click.stop="openAgentChat(agent)"
+                >
+                  <MessageCirclePlus :size="14" />
+                  去对话
+                </a-button>
+              </div>
+            </template>
           </InfoCard>
         </ExtensionCardGrid>
       </section>
@@ -280,6 +305,11 @@ defineExpose({
   border: 0;
 }
 
+.agent-card :deep(.info-card-tags) {
+  justify-content: flex-end;
+  margin-top: auto;
+}
+
 .agent-card-menu-trigger {
   display: inline-flex;
   align-items: center;
@@ -304,6 +334,26 @@ defineExpose({
 
   &.danger {
     color: var(--color-error-700);
+  }
+}
+
+.agent-card-actions {
+  display: flex;
+  justify-content: flex-end;
+  width: 100%;
+  margin-top: auto;
+}
+
+.agent-chat-entry {
+  min-width: 78px;
+  border: 0;
+  box-shadow: none;
+  font-size: 12px;
+
+  &:hover,
+  &:focus {
+    border: 0;
+    box-shadow: none;
   }
 }
 

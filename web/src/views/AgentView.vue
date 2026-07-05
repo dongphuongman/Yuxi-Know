@@ -90,7 +90,7 @@
 </template>
 
 <script setup>
-import { computed, ref, watch } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import { message } from 'ant-design-vue'
 import { Settings2, ChevronDown, Check } from 'lucide-vue-next'
 import { useRoute, useRouter } from 'vue-router'
@@ -123,6 +123,11 @@ const getRouteThreadId = () => {
   return typeof value === 'string' ? value : ''
 }
 
+const getRouteAgentId = () => {
+  const value = route.query.agent_id
+  return typeof value === 'string' ? value : ''
+}
+
 const syncSelectedThreadFromRoute = async () => {
   const chatComponent = chatComponentRef.value
   if (!chatComponent?.selectThreadFromRoute) return
@@ -145,10 +150,39 @@ const syncSelectedThreadFromRoute = async () => {
   }
 }
 
+const consumeRouteAgentSelection = async () => {
+  const targetAgentId = getRouteAgentId()
+  if (!targetAgentId || getRouteThreadId()) return
+
+  try {
+    if (!agentStore.isInitialized) {
+      await agentStore.initialize()
+    }
+
+    await nextTick()
+    await chatComponentRef.value?.selectThreadFromRoute?.('')
+    await agentStore.selectAgent(targetAgentId)
+  } catch (error) {
+    handleChatError(error, 'load')
+  } finally {
+    const nextQuery = { ...route.query }
+    delete nextQuery.agent_id
+    await router.replace({ name: 'AgentComp', query: nextQuery })
+  }
+}
+
 watch(
   () => route.params.thread_id,
   () => {
     syncSelectedThreadFromRoute()
+  },
+  { immediate: true }
+)
+
+watch(
+  () => route.query.agent_id,
+  () => {
+    consumeRouteAgentSelection()
   },
   { immediate: true }
 )
