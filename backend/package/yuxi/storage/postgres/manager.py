@@ -432,6 +432,15 @@ class PostgresManager(metaclass=SingletonMeta):
             "ALTER TABLE IF EXISTS agents ADD COLUMN IF NOT EXISTS share_config JSONB NOT NULL DEFAULT '{}'::jsonb",
             "ALTER TABLE IF EXISTS agents ADD COLUMN IF NOT EXISTS is_subagent BOOLEAN NOT NULL DEFAULT FALSE",
             "ALTER TABLE IF EXISTS user_config ADD COLUMN IF NOT EXISTS enable_memory BOOLEAN NOT NULL DEFAULT FALSE",
+            """
+            UPDATE cli_auth_sessions
+            SET api_key_id = NULL
+            WHERE api_key_id IN (
+                SELECT id FROM api_keys WHERE user_id IS NULL
+            )
+            """,
+            "DELETE FROM api_keys WHERE user_id IS NULL",
+            "ALTER TABLE IF EXISTS api_keys ALTER COLUMN user_id SET NOT NULL",
             "CREATE UNIQUE INDEX IF NOT EXISTS ix_agents_slug ON agents(slug)",
             "CREATE INDEX IF NOT EXISTS ix_agents_backend_id ON agents(backend_id)",
             "CREATE INDEX IF NOT EXISTS ix_agents_is_subagent ON agents(is_subagent)",

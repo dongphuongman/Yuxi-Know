@@ -18,6 +18,24 @@ from yuxi.utils.auth_utils import AuthUtils
 pytestmark = [pytest.mark.asyncio, pytest.mark.unit]
 
 
+class _ScalarResult:
+    def __init__(self, value):
+        self.value = value
+
+    def scalar_one_or_none(self):
+        return self.value
+
+
+class _FakeApiKeySession:
+    def __init__(self, api_key: APIKey):
+        self.api_key = api_key
+        self.execute_calls = 0
+
+    async def execute(self, _statement):
+        self.execute_calls += 1
+        return _ScalarResult(self.api_key)
+
+
 @pytest_asyncio.fixture()
 async def session():
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
@@ -92,29 +110,23 @@ async def test_api_key_rejects_deleted_bound_user_without_department_or_superadm
     assert verified_key is None
 
 
-async def test_department_only_api_key_does_not_fallback_to_superadmin(session):
-    db = session["db"]
-    empty_dept = Department(name="No Admin Dept")
-    db.add(empty_dept)
-    await db.commit()
-    await db.refresh(empty_dept)
-
+async def test_api_key_without_user_binding_is_rejected_before_department_mapping(session):
     secret, key_hash, key_prefix = AuthUtils.generate_api_key()
-    db.add(
-        APIKey(
-            key_hash=key_hash,
-            key_prefix=key_prefix,
-            name="department key",
-            department_id=empty_dept.id,
-            created_by=str(session["superadmin"].id),
-        )
+    api_key = APIKey(
+        key_hash=key_hash,
+        key_prefix=key_prefix,
+        name="department key",
+        user_id=None,
+        department_id=session["dept_b"].id,
+        created_by=str(session["superadmin"].id),
     )
-    await db.commit()
+    fake_db = _FakeApiKeySession(api_key)
 
-    user, verified_key = await _verify_api_key(secret, db)
+    user, verified_key = await _verify_api_key(secret, fake_db)
 
     assert user is None
     assert verified_key is None
+    assert fake_db.execute_calls == 1
 
 
 async def test_create_api_key_rejects_mismatched_department(session):

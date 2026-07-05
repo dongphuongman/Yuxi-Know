@@ -36,27 +36,13 @@ async def _verify_api_key(key: str, db: AsyncSession) -> tuple[User | None, APIK
     if api_key.expires_at and utc_now_naive() > api_key.expires_at:
         return None, None
 
-    if api_key.user_id:
-        result = await db.execute(select(User).filter(User.id == api_key.user_id))
-        user = result.scalar_one_or_none()
-        if user and not user.is_deleted:
-            return user, api_key
+    if not api_key.user_id:
         return None, None
 
-    if api_key.department_id:
-        result = await db.execute(
-            select(User)
-            .filter(
-                User.department_id == api_key.department_id,
-                User.role.in_(["admin", "superadmin"]),
-                User.is_deleted == 0,
-            )
-            .order_by(User.role.desc(), User.id.asc())
-            .limit(1)
-        )
-        user = result.scalar_one_or_none()
-        if user:
-            return user, api_key
+    result = await db.execute(select(User).filter(User.id == api_key.user_id))
+    user = result.scalar_one_or_none()
+    if user and not user.is_deleted:
+        return user, api_key
 
     return None, None
 

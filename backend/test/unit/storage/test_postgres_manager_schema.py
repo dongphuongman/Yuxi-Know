@@ -112,3 +112,29 @@ async def test_ensure_business_schema_creates_user_config_table():
 
     assert "CREATE TABLE IF NOT EXISTS user_config" in statements
     assert "enable_memory BOOLEAN NOT NULL DEFAULT FALSE" in statements
+
+
+@pytest.mark.asyncio
+async def test_ensure_business_schema_removes_unbound_api_keys_before_requiring_user_id():
+    manager = PostgresManager()
+    original_initialized = manager._initialized
+    original_engine = manager.async_engine
+    connection = _RecordingConnection()
+
+    manager._initialized = True
+    manager.async_engine = _RecordingEngine(connection)
+    try:
+        await manager.ensure_business_schema()
+    finally:
+        manager._initialized = original_initialized
+        manager.async_engine = original_engine
+
+    statements = "\n".join(connection.statements)
+
+    assert "UPDATE cli_auth_sessions" in statements
+    assert "DELETE FROM api_keys WHERE user_id IS NULL" in statements
+    assert "ALTER TABLE IF EXISTS api_keys ALTER COLUMN user_id SET NOT NULL" in statements
+    assert statements.index("UPDATE cli_auth_sessions") < statements.index("DELETE FROM api_keys WHERE user_id IS NULL")
+    assert statements.index("DELETE FROM api_keys WHERE user_id IS NULL") < statements.index(
+        "ALTER TABLE IF EXISTS api_keys ALTER COLUMN user_id SET NOT NULL"
+    )

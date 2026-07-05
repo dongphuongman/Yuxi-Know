@@ -734,7 +734,7 @@ class APIKey(Base):
     key_prefix = Column(String(16), nullable=False)
     name = Column(String(100), nullable=False)
 
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     department_id = Column(Integer, ForeignKey("departments.id"), nullable=True, index=True)
 
     expires_at = Column(DateTime, nullable=True)

@@ -42,7 +42,7 @@ class APIKeyResponse(BaseModel):
     id: int
     key_prefix: str
     name: str
-    user_id: int | None
+    user_id: int
     department_id: int | None
     expires_at: str | None
     is_enabled: bool
