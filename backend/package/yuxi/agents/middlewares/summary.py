@@ -10,10 +10,12 @@ from typing import Any
 
 from deepagents.middleware.summarization import SummarizationMiddleware
 from langchain.agents.middleware.summarization import ContextSize
-from langchain.agents.middleware.types import ModelRequest, ModelResponse
+from langchain.agents.middleware.types import ExtendedModelResponse, ModelRequest, ModelResponse
 from langchain.chat_models import BaseChatModel
-from langchain_core.messages import AnyMessage, ToolMessage
+from langchain_core.messages import AnyMessage, ToolMessage, get_buffer_string
 from langchain_core.messages.utils import count_tokens_approximately
+from langgraph.config import get_stream_writer
+from langgraph.constants import TAG_NOSTREAM
 
 from yuxi.agents.backends.composite import create_agent_composite_backend
 from yuxi.utils.paths import VIRTUAL_PATH_CONVERSATION_HISTORY, VIRTUAL_PATH_LARGE_TOOL_RESULTS
@@ -26,6 +28,27 @@ _SUMMARY_SANITIZED_MESSAGES: ContextVar[dict[tuple[int, ...], list[AnyMessage]] 
     "yuxi_summary_sanitized_messages",
     default=None,
 )
+_SUMMARY_COMPRESSION_STATE: ContextVar[dict[str, bool] | None] = ContextVar(
+    "yuxi_summary_compression_state",
+    default=None,
+)
+
+
+def _emit_compression(status: str, **extra: Any) -> None:
+    try:
+        writer = get_stream_writer()
+    except RuntimeError:
+        return
+    writer({"type": "yuxi.context_compression", "status": status, **extra})
+
+
+def _emit_compression_started_once() -> None:
+    state = _SUMMARY_COMPRESSION_STATE.get()
+    if state is not None and state.get("started"):
+        return
+    if state is not None:
+        state["started"] = True
+    _emit_compression("started")
 
 
 def _count_tokens_for_summary_trigger(messages: Iterable[Any], **kwargs: Any) -> int:
@@ -226,23 +249,76 @@ class YuxiSummarizationMiddleware(SummarizationMiddleware):
         except Exception:
             return None
 
-    def _create_summary(self, messages_to_summarize: list[AnyMessage]) -> str:
-        return super()._create_summary(
-            self._sanitize_messages_for_summary(
-                messages_to_summarize,
-                backend=_SUMMARY_BACKEND.get(),
+    @staticmethod
+    def _summarization_event_from_result(result: Any) -> dict | None:
+        if not isinstance(result, ExtendedModelResponse):
+            return None
+        command = getattr(result, "command", None)
+        update = getattr(command, "update", None) if command is not None else None
+        if not isinstance(update, dict):
+            return None
+        event = update.get("_summarization_event")
+        return event if isinstance(event, dict) else None
+
+    def _emit_completed(self, result: Any) -> None:
+        event = self._summarization_event_from_result(result)
+        if event is not None:
+            _emit_compression(
+                "completed",
+                cutoff_index=event.get("cutoff_index"),
+                file_path=event.get("file_path"),
             )
+
+    # 重写 _create_summary/_acreate_summary 以在摘要 LLM 调用上挂 TAG_NOSTREAM：父类
+    # 的 model.invoke 带 lc_source 元数据但无 nostream 标记，其 token 流会被 LangGraph
+    # messages stream 捕获并广播到前端，形成 phantom 摘要消息。带 TAG_NOSTREAM 后流式
+    # 层在源头跳过该调用，无需 chat_service 下游过滤，主 messages 流天然只含用户可见回复。
+    # 父类硬编码 invoke config 且无 tags 钩子（self.model 为中间件实例共享属性，并发下不能
+    # 临时换绑 bind(tags=...)），故只能重写；trim/format 是纯同步逻辑，抽到 _build_summary_prompt
+    # 供 sync/async 两条路径共用，避免逐字重复。
+    _SUMMARY_INVOKE_CONFIG = {"metadata": {"lc_source": "summarization"}, "tags": [TAG_NOSTREAM]}
+
+    def _build_summary_prompt(self, sanitized: list[AnyMessage]) -> str | None:
+        trimmed = self._lc_helper._trim_messages_for_summary(sanitized)
+        if not trimmed:
+            return None
+        return self._lc_helper.summary_prompt.format(
+            messages=get_buffer_string(trimmed, format="xml")
+        ).rstrip()
+
+    def _create_summary(self, messages_to_summarize: list[AnyMessage]) -> str:
+        sanitized = self._sanitize_messages_for_summary(
+            messages_to_summarize,
+            backend=_SUMMARY_BACKEND.get(),
         )
+        if not sanitized:
+            return "No previous conversation history."
+        prompt = self._build_summary_prompt(sanitized)
+        if prompt is None:
+            return "Previous conversation was too long to summarize."
+        try:
+            return self.model.invoke(prompt, config=self._SUMMARY_INVOKE_CONFIG).text.strip()
+        except Exception as e:
+            return f"Error generating summary: {e!s}"
 
     async def _acreate_summary(self, messages_to_summarize: list[AnyMessage]) -> str:
-        return await super()._acreate_summary(
-            self._sanitize_messages_for_summary(
-                messages_to_summarize,
-                backend=_SUMMARY_BACKEND.get(),
-            )
+        sanitized = self._sanitize_messages_for_summary(
+            messages_to_summarize,
+            backend=_SUMMARY_BACKEND.get(),
         )
+        if not sanitized:
+            return "No previous conversation history."
+        prompt = self._build_summary_prompt(sanitized)
+        if prompt is None:
+            return "Previous conversation was too long to summarize."
+        try:
+            response = await self.model.ainvoke(prompt, config=self._SUMMARY_INVOKE_CONFIG)
+            return response.text.strip()
+        except Exception as e:
+            return f"Error generating summary: {e!s}"
 
     def _offload_to_backend(self, backend, messages: list[AnyMessage]) -> str | None:
+        _emit_compression_started_once()
         return super()._offload_to_backend(
             backend,
             self._sanitize_messages_for_summary(
@@ -252,6 +328,7 @@ class YuxiSummarizationMiddleware(SummarizationMiddleware):
         )
 
     async def _aoffload_to_backend(self, backend, messages: list[AnyMessage]) -> str | None:
+        _emit_compression_started_once()
         return await super()._aoffload_to_backend(
             backend,
             self._sanitize_messages_for_summary(
@@ -267,9 +344,19 @@ class YuxiSummarizationMiddleware(SummarizationMiddleware):
     ) -> ModelResponse:
         backend_token = _SUMMARY_BACKEND.set(self._backend_for_request(request))
         sanitized_token = _SUMMARY_SANITIZED_MESSAGES.set({})
+        compression_state: dict[str, bool] = {"started": False}
+        compression_token = _SUMMARY_COMPRESSION_STATE.set(compression_state)
         try:
-            return super().wrap_model_call(request, handler)
+            try:
+                result = super().wrap_model_call(request, handler)
+            except Exception as exc:
+                if compression_state.get("started"):
+                    _emit_compression("failed", error=repr(exc))
+                raise
+            self._emit_completed(result)
+            return result
         finally:
+            _SUMMARY_COMPRESSION_STATE.reset(compression_token)
             _SUMMARY_SANITIZED_MESSAGES.reset(sanitized_token)
             _SUMMARY_BACKEND.reset(backend_token)
 
@@ -280,9 +367,19 @@ class YuxiSummarizationMiddleware(SummarizationMiddleware):
     ) -> ModelResponse:
         backend_token = _SUMMARY_BACKEND.set(self._backend_for_request(request))
         sanitized_token = _SUMMARY_SANITIZED_MESSAGES.set({})
+        compression_state: dict[str, bool] = {"started": False}
+        compression_token = _SUMMARY_COMPRESSION_STATE.set(compression_state)
         try:
-            return await super().awrap_model_call(request, handler)
+            try:
+                result = await super().awrap_model_call(request, handler)
+            except Exception as exc:
+                if compression_state.get("started"):
+                    _emit_compression("failed", error=repr(exc))
+                raise
+            self._emit_completed(result)
+            return result
         finally:
+            _SUMMARY_COMPRESSION_STATE.reset(compression_token)
             _SUMMARY_SANITIZED_MESSAGES.reset(sanitized_token)
             _SUMMARY_BACKEND.reset(backend_token)
 

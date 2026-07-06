@@ -7,6 +7,7 @@ import pytest
 from langchain.agents.middleware.types import ExtendedModelResponse, ModelRequest, ModelResponse
 from deepagents.middleware.summarization import SummarizationMiddleware
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage, get_buffer_string
+from langchain_core.exceptions import ContextOverflowError
 
 from yuxi.agents.backends.composite import create_agent_composite_backend
 from yuxi.agents.middlewares.summary import (
@@ -51,6 +52,15 @@ class _MemoryBackend:
     def edit(self, path: str, old_string: str, new_string: str) -> SimpleNamespace:
         self.writes.append((path, new_string))
         return SimpleNamespace(error=None)
+
+    async def adownload_files(self, paths: list[str]) -> list[SimpleNamespace]:
+        return self.download_files(paths)
+
+    async def awrite(self, path: str, content: str) -> SimpleNamespace:
+        return self.write(path, content)
+
+    async def aedit(self, path: str, old_string: str, new_string: str) -> SimpleNamespace:
+        return self.edit(path, old_string, new_string)
 
 
 def _expected_tool_result_path(content: str, tool_name: str = "query_kb") -> str:
@@ -109,6 +119,17 @@ def _content_char_counter(messages, **_kwargs) -> int:
         else:
             total += len(str(content))
     return total
+
+
+@pytest.fixture
+def compression_events(monkeypatch: pytest.MonkeyPatch) -> list[dict]:
+    """捕获 YuxiSummarizationMiddleware 通过 stream writer 推送的压缩事件。"""
+    emitted: list[dict] = []
+    monkeypatch.setattr(
+        "yuxi.agents.middlewares.summary.get_stream_writer",
+        lambda: (lambda payload: emitted.append(payload)),
+    )
+    return emitted
 
 
 @pytest.mark.unit
@@ -476,3 +497,133 @@ def test_offload_history_uses_tool_messages_with_replaced_content() -> None:
     assert "[Tool result saved]" in history_content
     assert "最终答案保留" in history_content
     assert "TOOL_RESULT_SHOULD_NOT_BE_SUMMARIZED" in history_content
+
+
+def _make_compressing_middleware(backend: _MemoryBackend) -> tuple[YuxiSummarizationMiddleware, str]:
+    large_result = "BEGIN\n" + ("raw result payload\n" * 200)
+    middleware = YuxiSummarizationMiddleware(
+        model=_RecordingModel(),
+        backend=backend,
+        trigger=("tokens", 500),
+        keep=("messages", 3),
+        token_counter=_content_char_counter,
+        trim_tokens_to_summarize=None,
+        tool_result_offload_token_limit=1,
+    )
+    middleware._history_path_prefix = VIRTUAL_PATH_CONVERSATION_HISTORY
+    middleware._large_tool_results_prefix = VIRTUAL_PATH_LARGE_TOOL_RESULTS
+    middleware._backend_for_request = lambda _request: backend
+    return middleware, large_result
+
+
+def _compressing_messages(large_result: str) -> list:
+    return [
+        HumanMessage(content="查资料"),
+        AIMessage(content="", tool_calls=[{"id": "call-1", "name": "query_kb", "args": {}}]),
+        ToolMessage(content=large_result, tool_call_id="call-1", name="query_kb"),
+        AIMessage(content="资料已整理"),
+        HumanMessage(content="继续"),
+    ]
+
+
+@pytest.mark.unit
+async def test_awrap_model_call_emits_started_and_completed_when_summary_triggers(
+    compression_events: list[dict],
+) -> None:
+    backend = _MemoryBackend()
+    middleware, large_result = _make_compressing_middleware(backend)
+    messages = _compressing_messages(large_result)
+
+    async def handler(request: ModelRequest) -> ModelResponse:
+        return ModelResponse(result=[AIMessage(content="ok")])
+
+    result = await middleware.awrap_model_call(_model_request(messages), handler)
+
+    assert isinstance(result, ExtendedModelResponse)
+    statuses = [event["status"] for event in compression_events]
+    assert statuses == ["started", "completed"]
+    assert all(event["type"] == "yuxi.context_compression" for event in compression_events)
+    completed = compression_events[-1]
+    assert isinstance(completed.get("cutoff_index"), int)
+    assert completed.get("file_path") is not None
+
+
+@pytest.mark.unit
+async def test_awrap_model_call_emits_nothing_when_summary_not_triggered(compression_events: list[dict]) -> None:
+    backend = _MemoryBackend()
+    middleware = create_summary_middleware(
+        model=_DummyModel(),
+        trigger=("messages", 100),
+        keep=("messages", 10),
+        trim_tokens_to_summarize=None,
+    )
+    middleware._backend_for_request = lambda _request: backend
+    messages = [*_tool_messages(), HumanMessage(content="新的问题")]
+
+    async def handler(request: ModelRequest) -> ModelResponse:
+        return ModelResponse(result=[AIMessage(content="ok")])
+
+    result = await middleware.awrap_model_call(_model_request(messages), handler)
+
+    assert not isinstance(result, ExtendedModelResponse)
+    assert compression_events == []
+
+
+@pytest.mark.unit
+async def test_awrap_model_call_emits_started_when_overflow_falls_back_to_summary(
+    compression_events: list[dict],
+) -> None:
+    backend = _MemoryBackend()
+    middleware, large_result = _make_compressing_middleware(backend)
+    middleware._lc_helper.trigger = [("tokens", 100_000)]
+    middleware._lc_helper._trigger_clauses = [{"tokens": 100_000}]
+    messages = _compressing_messages(large_result)
+    calls = 0
+
+    async def handler(request: ModelRequest) -> ModelResponse:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise ContextOverflowError("context overflow")
+        return ModelResponse(result=[AIMessage(content="ok")])
+
+    result = await middleware.awrap_model_call(_model_request(messages), handler)
+
+    assert isinstance(result, ExtendedModelResponse)
+    assert calls == 2
+    assert [event["status"] for event in compression_events] == ["started", "completed"]
+
+
+@pytest.mark.unit
+async def test_awrap_model_call_emits_failed_when_handler_raises_after_started(
+    compression_events: list[dict],
+) -> None:
+    backend = _MemoryBackend()
+    middleware, large_result = _make_compressing_middleware(backend)
+    messages = _compressing_messages(large_result)
+
+    async def handler(request: ModelRequest) -> ModelResponse:
+        raise RuntimeError("model boom")
+
+    with pytest.raises(RuntimeError, match="model boom"):
+        await middleware.awrap_model_call(_model_request(messages), handler)
+
+    statuses = [event["status"] for event in compression_events]
+    assert statuses == ["started", "failed"]
+    assert "model boom" in compression_events[-1]["error"]
+
+
+@pytest.mark.unit
+def test_wrap_model_call_emits_started_and_completed_sync(compression_events: list[dict]) -> None:
+    backend = _MemoryBackend()
+    middleware, large_result = _make_compressing_middleware(backend)
+    messages = _compressing_messages(large_result)
+
+    def handler(request: ModelRequest) -> ModelResponse:
+        return ModelResponse(result=[AIMessage(content="ok")])
+
+    result = middleware.wrap_model_call(_model_request(messages), handler)
+
+    assert isinstance(result, ExtendedModelResponse)
+    statuses = [event["status"] for event in compression_events]
+    assert statuses == ["started", "completed"]

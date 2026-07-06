@@ -118,7 +118,7 @@
                   <div></div>
                   <div></div>
                 </div>
-                <span class="generating-text">正在生成回复...</span>
+                <span class="generating-text">{{ replyLoadingText }}</span>
               </div>
             </div>
           </div>
@@ -1772,6 +1772,9 @@ const isReplyLoading = computed(() => {
   const threadState = currentThreadState.value
   return Boolean(threadState?.replyLoadingVisible)
 })
+const replyLoadingText = computed(() =>
+  currentThreadState.value?.contextCompressing ? '正在压缩上下文...' : '正在生成回复...'
+)
 const isSendButtonDisabled = computed(() => {
   return (
     sendCooldownActive.value ||
