@@ -77,6 +77,9 @@ def _patch_retrievers(monkeypatch, *, kb_type: str = "milvus", retriever=None):
         del args, kwargs
         raise AssertionError("knowledge base method is not configured for this test")
 
+    async def _fake_get_database_document_support(kb_id: str):
+        return {"kb_id": kb_id, "name": "FAQ", "kb_type": kb_type}, kb_type != "dify"
+
     manager = SimpleNamespace(
         get_retrievers=lambda: {
             "db-1": {
@@ -87,6 +90,7 @@ def _patch_retrievers(monkeypatch, *, kb_type: str = "milvus", retriever=None):
         },
         find_file_content=_not_configured,
         open_file_content=_not_configured,
+        get_database_document_support=_fake_get_database_document_support,
     )
     # 复用真实 manager 的 retrieve/open_document/find_in_document，使其内部走上面的 mock。
     for name in (
@@ -104,7 +108,7 @@ def _patch_retrievers(monkeypatch, *, kb_type: str = "milvus", retriever=None):
 
 async def _fake_visible_kbs(runtime):
     del runtime
-    return [{"kb_id": "db-1", "name": "FAQ"}]
+    return [{"kb_id": "db-1", "name": "FAQ", "kb_type": "milvus"}]
 
 
 @pytest.mark.asyncio
@@ -459,12 +463,23 @@ async def test_search_file_returns_files_by_query(monkeypatch) -> None:
         ),
     ]
 
-    async def _fake_list_by_kb_id_after(self, kb_id, *, after_file_id=None, limit=500, files_only=False):
-        return fake_files
+    async def _fake_search_files(
+        self,
+        *,
+        kb_id,
+        filename_query=None,
+        statuses=None,
+        offset=0,
+        limit=100,
+        files_only=True,
+    ):
+        del self, kb_id, statuses, files_only
+        matches = [file for file in fake_files if (filename_query or "") in file.filename.lower()]
+        return matches[offset : offset + limit], len(matches)
 
     from yuxi.repositories.knowledge_file_repository import KnowledgeFileRepository
 
-    monkeypatch.setattr(KnowledgeFileRepository, "list_by_kb_id_after", _fake_list_by_kb_id_after)
+    monkeypatch.setattr(KnowledgeFileRepository, "search_files", _fake_search_files)
 
     runtime = SimpleNamespace(context=SimpleNamespace())
     result = await _run_search_file(query="test", runtime=runtime)
@@ -502,12 +517,22 @@ async def test_search_file_returns_all_files_when_query_empty(monkeypatch) -> No
         ),
     ]
 
-    async def _fake_list_by_kb_id_after(self, kb_id, *, after_file_id=None, limit=500, files_only=False):
-        return fake_files
+    async def _fake_search_files(
+        self,
+        *,
+        kb_id,
+        filename_query=None,
+        statuses=None,
+        offset=0,
+        limit=100,
+        files_only=True,
+    ):
+        del self, kb_id, filename_query, statuses, files_only
+        return fake_files[offset : offset + limit], len(fake_files)
 
     from yuxi.repositories.knowledge_file_repository import KnowledgeFileRepository
 
-    monkeypatch.setattr(KnowledgeFileRepository, "list_by_kb_id_after", _fake_list_by_kb_id_after)
+    monkeypatch.setattr(KnowledgeFileRepository, "search_files", _fake_search_files)
 
     runtime = SimpleNamespace(context=SimpleNamespace())
     result = await _run_search_file(kb_name="FAQ", runtime=runtime)
@@ -535,12 +560,22 @@ async def test_search_file_pagination(monkeypatch) -> None:
         for i in range(10)
     ]
 
-    async def _fake_list_by_kb_id_after(self, kb_id, *, after_file_id=None, limit=500, files_only=False):
-        return fake_files
+    async def _fake_search_files(
+        self,
+        *,
+        kb_id,
+        filename_query=None,
+        statuses=None,
+        offset=0,
+        limit=100,
+        files_only=True,
+    ):
+        del self, kb_id, filename_query, statuses, files_only
+        return fake_files[offset : offset + limit], len(fake_files)
 
     from yuxi.repositories.knowledge_file_repository import KnowledgeFileRepository
 
-    monkeypatch.setattr(KnowledgeFileRepository, "list_by_kb_id_after", _fake_list_by_kb_id_after)
+    monkeypatch.setattr(KnowledgeFileRepository, "search_files", _fake_search_files)
 
     runtime = SimpleNamespace(context=SimpleNamespace())
     result = await _run_search_file(kb_name="FAQ", offset=2, limit=3, runtime=runtime)
@@ -567,6 +602,20 @@ async def test_search_file_rejects_invisible_kb(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_search_file_skips_read_only_kbs(monkeypatch) -> None:
+    async def _fake_visible_read_only_kbs(runtime):
+        del runtime
+        return [{"kb_id": "dify-1", "name": "Dify", "kb_type": "dify"}]
+
+    monkeypatch.setattr(tools, "_resolve_visible_knowledge_bases_for_query", _fake_visible_read_only_kbs)
+
+    runtime = SimpleNamespace(context=SimpleNamespace())
+    result = await _run_search_file(query="report", runtime=runtime)
+
+    assert "只支持检索，不支持文件搜索" in result
+
+
+@pytest.mark.asyncio
 async def test_search_file_total_reflects_full_set_not_page(monkeypatch) -> None:
     """total/has_more 必须基于全量文件，而非按 limit/offset 截断的窗口。"""
     monkeypatch.setattr(tools, "_resolve_visible_knowledge_bases_for_query", _fake_visible_kbs)
@@ -586,13 +635,22 @@ async def test_search_file_total_reflects_full_set_not_page(monkeypatch) -> None
         for i in range(50)
     ]
 
-    async def _fake_list_by_kb_id_after(self, kb_id, *, after_file_id=None, limit=500, files_only=False):
-        # 真实仓储会按 limit 截断；此 mock 同样遵守 limit，以暴露按 limit+offset 取数导致的 total 失真。
-        return fake_files[:limit]
+    async def _fake_search_files(
+        self,
+        *,
+        kb_id,
+        filename_query=None,
+        statuses=None,
+        offset=0,
+        limit=100,
+        files_only=True,
+    ):
+        del self, kb_id, filename_query, statuses, files_only
+        return fake_files[offset : offset + limit], len(fake_files)
 
     from yuxi.repositories.knowledge_file_repository import KnowledgeFileRepository
 
-    monkeypatch.setattr(KnowledgeFileRepository, "list_by_kb_id_after", _fake_list_by_kb_id_after)
+    monkeypatch.setattr(KnowledgeFileRepository, "search_files", _fake_search_files)
 
     runtime = SimpleNamespace(context=SimpleNamespace())
     result = await _run_search_file(kb_name="FAQ", offset=0, limit=10, runtime=runtime)
@@ -614,9 +672,7 @@ def _patch_download_manager(monkeypatch, *, kb_type: str = "milvus", file_downlo
 
     async def _fake_get_kb_for_database(kb_id: str):
         del kb_id
-        return SimpleNamespace(
-            get_file_download=file_download or _async_get_file_download(b"", "file")
-        )
+        return SimpleNamespace(get_file_download=file_download or _async_get_file_download(b"", "file"))
 
     manager._get_kb_for_database = _fake_get_kb_for_database
     return manager
@@ -631,9 +687,7 @@ async def _run_download_kb_file(**kwargs):
 
 
 @pytest.mark.asyncio
-async def test_download_kb_file_writes_original_to_outputs_and_returns_virtual_path(
-    monkeypatch, tmp_path
-) -> None:
+async def test_download_kb_file_writes_original_to_outputs_and_returns_virtual_path(monkeypatch, tmp_path) -> None:
     captured: dict = {}
 
     def _fake_resolve_output_path(file_thread_id, uid, data, file_id, save_as):
@@ -655,12 +709,8 @@ async def test_download_kb_file_writes_original_to_outputs_and_returns_virtual_p
         lambda thread_id, path, *, uid: f"/home/gem/user-data/outputs/{Path(path).name}",
     )
 
-    runtime = SimpleNamespace(
-        context=SimpleNamespace(file_thread_id="thread-1", uid="user-1")
-    )
-    result = await _run_download_kb_file(
-        kb_id="db-1", file_id="file-1", runtime=runtime
-    )
+    runtime = SimpleNamespace(context=SimpleNamespace(file_thread_id="thread-1", uid="user-1"))
+    result = await _run_download_kb_file(kb_id="db-1", file_id="file-1", runtime=runtime)
 
     assert (tmp_path / "report.pdf").read_bytes() == b"%PDF-1.4 bytes"
     assert captured["file_thread_id"] == "thread-1"
@@ -694,12 +744,8 @@ async def test_download_kb_file_passes_save_as_argument(monkeypatch, tmp_path) -
         lambda thread_id, path, *, uid: f"/home/gem/user-data/outputs/{Path(path).name}",
     )
 
-    runtime = SimpleNamespace(
-        context=SimpleNamespace(file_thread_id="thread-1", uid="user-1")
-    )
-    result = await _run_download_kb_file(
-        kb_id="db-1", file_id="file-1", save_as="renamed.xlsx", runtime=runtime
-    )
+    runtime = SimpleNamespace(context=SimpleNamespace(file_thread_id="thread-1", uid="user-1"))
+    result = await _run_download_kb_file(kb_id="db-1", file_id="file-1", save_as="renamed.xlsx", runtime=runtime)
 
     assert captured["save_as"] == "renamed.xlsx"
     assert result["saved_as"] == "renamed.xlsx"
@@ -714,9 +760,7 @@ async def test_download_kb_file_rejects_invisible_resource(monkeypatch) -> None:
     monkeypatch.setattr(tools, "_resolve_visible_knowledge_bases_for_query", _visible_kbs)
 
     runtime = SimpleNamespace(context=SimpleNamespace())
-    result = await _run_download_kb_file(
-        kb_id="db-1", file_id="file-1", runtime=runtime
-    )
+    result = await _run_download_kb_file(kb_id="db-1", file_id="file-1", runtime=runtime)
 
     assert "不存在或当前会话未启用" in result
 
@@ -736,9 +780,7 @@ async def test_download_kb_file_rejects_readonly_knowledge_base(monkeypatch) -> 
     _patch_download_manager(monkeypatch, kb_type="dify", file_download=_must_not_download)
 
     runtime = SimpleNamespace(context=SimpleNamespace(file_thread_id="thread-1", uid="user-1"))
-    result = await _run_download_kb_file(
-        kb_id="db-1", file_id="file-1", runtime=runtime
-    )
+    result = await _run_download_kb_file(kb_id="db-1", file_id="file-1", runtime=runtime)
 
     assert not_called["flag"] is False
     assert "只支持检索" in result
@@ -749,12 +791,8 @@ async def test_download_kb_file_requires_kb_and_file_id(monkeypatch) -> None:
     monkeypatch.setattr(tools, "_resolve_visible_knowledge_bases_for_query", _fake_visible_kbs)
     runtime = SimpleNamespace(context=SimpleNamespace())
 
-    assert "请提供 kb_id" in await _run_download_kb_file(
-        kb_id="", file_id="file-1", runtime=runtime
-    )
-    assert "请提供 file_id" in await _run_download_kb_file(
-        kb_id="db-1", file_id="", runtime=runtime
-    )
+    assert "请提供 kb_id" in await _run_download_kb_file(kb_id="", file_id="file-1", runtime=runtime)
+    assert "请提供 file_id" in await _run_download_kb_file(kb_id="db-1", file_id="", runtime=runtime)
 
 
 @pytest.mark.asyncio
@@ -766,9 +804,7 @@ async def test_download_kb_file_missing_sandbox_context_returns_error(monkeypatc
     )
 
     runtime = SimpleNamespace(context=SimpleNamespace())
-    result = await _run_download_kb_file(
-        kb_id="db-1", file_id="file-1", runtime=runtime
-    )
+    result = await _run_download_kb_file(kb_id="db-1", file_id="file-1", runtime=runtime)
 
     assert "沙盒上下文" in result
 
@@ -779,9 +815,7 @@ def test_resolve_download_output_path_strips_directory_and_avoids_traversal(monk
     monkeypatch.setattr(tools, "sandbox_outputs_dir", lambda thread_id: tmp_path)
 
     data = {"filename": "report.pdf"}
-    path = tools._resolve_download_output_path(
-        "thread-1", "user-1", data, "file-1", "../../../etc/passwd"
-    )
+    path = tools._resolve_download_output_path("thread-1", "user-1", data, "file-1", "../../../etc/passwd")
 
     assert path.parent == tmp_path
     # 纯文件名，不含目录分隔，且未逃出 outputs 目录

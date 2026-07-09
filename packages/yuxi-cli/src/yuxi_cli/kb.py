@@ -236,7 +236,7 @@ def _render_retrieve(data: dict, console: Console, *, as_json: bool) -> None:
                 continue
             content = str(chunk.get("content") or "").strip()
             file_id = str(chunk.get("file_id") or "")
-            score = chunk.get("score")
+            score = (chunk.get("metadata") or {}).get("score")
             header = f"[bold]#{idx}[/bold]"
             if file_id:
                 header += f"  file={file_id}"

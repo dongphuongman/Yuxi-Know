@@ -664,14 +664,27 @@ class KnowledgeBaseManager:
 
         repo = KnowledgeFileRepository()
         all_files = []
-        for kb, files in await asyncio.gather(*(self._scan_kb_files(repo, kb) for kb in knowledge_bases)):
+        use_sql_pagination = len(knowledge_bases) == 1
+        candidate_limit = normalized_limit if use_sql_pagination else normalized_offset + normalized_limit
+        query_offset = normalized_offset if use_sql_pagination else 0
+        search_results = await asyncio.gather(
+            *(
+                self._search_kb_files(
+                    repo,
+                    kb,
+                    query=normalized_query,
+                    statuses=accepted_statuses,
+                    offset=query_offset,
+                    limit=candidate_limit,
+                )
+                for kb in knowledge_bases
+            )
+        )
+        total = 0
+        for kb, files, kb_total in search_results:
+            total += kb_total
             kb_id = kb.get("kb_id")
             for file in files:
-                if accepted_statuses is not None and (file.status or "") not in accepted_statuses:
-                    continue
-                if normalized_query and normalized_query not in (file.filename or "").lower():
-                    continue
-
                 item = {
                     "kb_id": kb_id,
                     "kb_name": kb.get("name"),
@@ -689,9 +702,12 @@ class KnowledgeBaseManager:
                     item["parent_id"] = file.parent_id
                 all_files.append(item)
 
-        all_files.sort(key=lambda item: item.get("updated_at") or "", reverse=True)
-        total = len(all_files)
-        paginated_files = all_files[normalized_offset : normalized_offset + normalized_limit]
+        if not use_sql_pagination:
+            # 多库才需要跨库按更新时间归并；单库结果已由 DB 按 updated_at desc, file_id asc 排好序。
+            all_files.sort(key=lambda item: item.get("updated_at") or "", reverse=True)
+        paginated_files = (
+            all_files if use_sql_pagination else all_files[normalized_offset : normalized_offset + normalized_limit]
+        )
         return {
             "files": paginated_files,
             "total": total,
@@ -710,16 +726,27 @@ class KnowledgeBaseManager:
         }.get(status, {status})
 
     @staticmethod
-    async def _scan_kb_files(repo, kb: dict) -> tuple[dict, list]:
-        """扫描单个知识库的文件，kb_id 缺失时返回空列表，供并行 gather 使用。"""
+    async def _search_kb_files(
+        repo,
+        kb: dict,
+        *,
+        query: str | None,
+        statuses: set[str] | None,
+        offset: int,
+        limit: int,
+    ) -> tuple[dict, list, int]:
+        """搜索单个知识库文件，kb_id 缺失时返回空列表，供并行 gather 使用。"""
         if not kb.get("kb_id"):
-            return kb, []
-        files = await repo.list_by_kb_id_after(
+            return kb, [], 0
+        files, total = await repo.search_files(
             kb_id=kb["kb_id"],
-            limit=KB_FILE_SEARCH_SCAN_LIMIT,
+            filename_query=query,
+            statuses=statuses,
+            offset=offset,
+            limit=limit,
             files_only=True,
         )
-        return kb, files
+        return kb, files, total
 
     async def document_file_exists(self, kb_id: str, filename: str) -> bool:
         """检查指定知识库中是否存在给定展示文件名或相对路径的文件。"""
@@ -825,7 +852,7 @@ class KnowledgeBaseManager:
         return await kb_instance.read_file_preview(kb_id, file_id)
 
     async def get_file_download(self, kb_id: str, file_id: str, variant: str = "original") -> dict:
-        self._require_kb_supports_documents(kb_id, "Download")
+        await self._require_kb_supports_documents(kb_id, "download")
         kb_instance = await self._get_kb_for_database(kb_id)
         return await kb_instance.get_file_download(kb_id, file_id, variant)
 
@@ -966,7 +993,7 @@ class KnowledgeBaseManager:
 
         不支持文档全文操作的知识库（如 dify 只读源）抛 ValueError。
         """
-        self._require_kb_supports_documents(kb_id, "Open")
+        await self._require_kb_supports_documents(kb_id, "open")
         window = await self.open_file_content(kb_id, file_id, offset=offset, limit=limit)
         return OpenOutputSchema(kb_id=kb_id, file_id=file_id, **window).model_dump()
 
@@ -985,7 +1012,7 @@ class KnowledgeBaseManager:
 
         不支持文档全文操作的知识库（如 dify 只读源）抛 ValueError。
         """
-        self._require_kb_supports_documents(kb_id, "Find")
+        await self._require_kb_supports_documents(kb_id, "find")
         result = await self.find_file_content(
             kb_id,
             file_id,
@@ -997,13 +1024,19 @@ class KnowledgeBaseManager:
         )
         return FindOutputSchema(kb_id=kb_id, file_id=file_id, **result).model_dump()
 
-    def _require_kb_supports_documents(self, kb_id: str, operation: str) -> None:
-        """根据已注册 retriever 的元数据判断是否支持文档全文操作；不支持抛 ValueError。"""
-        target_info = self.get_retrievers().get(kb_id) or {}
-        metadata = target_info.get("metadata") or {}
-        kb_type = str(metadata.get("kb_type") or "").lower()
-        if not self.database_type_supports_documents(kb_type):
-            raise ValueError(f"{target_info.get('name') or kb_type} 只支持检索，不支持{operation}")
+    async def _require_kb_supports_documents(self, kb_id: str, operation: str) -> None:
+        """按数据库元数据判断是否支持文档全文操作；不支持抛 ValueError。"""
+        db_info, supports_documents = await self.get_database_document_support(kb_id)
+        if not db_info:
+            raise KBNotFoundError(f"知识库资源 '{kb_id}' 不存在")
+        kb_type = str(db_info.get("kb_type") or "").lower()
+        if not supports_documents:
+            operation_label = {
+                "open": "文档查看",
+                "find": "文档查找",
+                "download": "文件下载",
+            }.get(operation, operation)
+            raise ValueError(f"{db_info.get('name') or kb_type} 只支持检索，不支持{operation_label}")
 
     # =============================================================================
     # 管理器特有的方法

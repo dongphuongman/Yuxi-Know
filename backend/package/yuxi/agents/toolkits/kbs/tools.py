@@ -320,8 +320,11 @@ async def search_file(
         target_kbs = visible_kbs
 
     knowledge_base = _get_knowledge_base()
+    searchable_kbs = [kb for kb in target_kbs if knowledge_base.database_type_supports_documents(kb.get("kb_type"))]
+    if not searchable_kbs:
+        return "当前匹配的知识库只支持检索，不支持文件搜索"
     return await knowledge_base.search_document_files(
-        target_kbs,
+        searchable_kbs,
         query=query,
         offset=offset,
         limit=limit,

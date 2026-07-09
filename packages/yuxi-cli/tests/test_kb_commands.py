@@ -170,6 +170,7 @@ def test_kb_query_renders_chunks(tmp_path):
     out = _output(console)
     assert "hello world" in out
     assert "file=f1" in out
+    assert "score=0.9" in out
     name, args, kwargs = FakeKbClient.calls[-1]
     assert kwargs["options"] == {"final_top_k": 5, "search_mode": "hybrid"}
 

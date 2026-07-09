@@ -103,11 +103,14 @@ async def open_external_file(
     current_user: User = Depends(get_required_user),
 ):
     """按行窗口打开文件解析后的 Markdown 内容。"""
-    await _require_accessible_kb(kb_id, current_user.uid)
+    await _require_accessible_kb(kb_id, current_user.uid, require_documents=True, operation="文档查看")
     try:
         return await knowledge_base.open_document(kb_id, file_id, offset=offset, limit=limit)
-    except Exception as e:
+    except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:
+        logger.exception(f"external 打开知识库文件失败 {e}")
+        raise HTTPException(status_code=400, detail="打开知识库文件失败") from e
 
 
 @external_kb.post("/databases/external/{kb_id}/files/{file_id}/find")
@@ -118,7 +121,7 @@ async def find_external_file(
     current_user: User = Depends(get_required_user),
 ):
     """在指定文件内做关键词或正则定位，返回匹配窗口。"""
-    await _require_accessible_kb(kb_id, current_user.uid)
+    await _require_accessible_kb(kb_id, current_user.uid, require_documents=True, operation="文档查找")
     if not payload.patterns:
         raise HTTPException(status_code=400, detail="patterns 不能为空")
     try:
@@ -131,11 +134,25 @@ async def find_external_file(
             max_windows=payload.max_windows,
             window_size=payload.window_size,
         )
-    except Exception as e:
+    except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:
+        logger.exception(f"external 知识库文件内检索失败 {e}")
+        raise HTTPException(status_code=400, detail="知识库文件内检索失败") from e
 
 
-async def _require_accessible_kb(kb_id: str, uid: str) -> None:
-    """校验知识库对 uid 可见，不可见抛 404。"""
-    if not await knowledge_base.get_accessible_database_info_by_uid(uid, str(kb_id or "").strip()):
+async def _require_accessible_kb(
+    kb_id: str,
+    uid: str,
+    *,
+    require_documents: bool = False,
+    operation: str = "文档查看",
+) -> dict:
+    """校验知识库对 uid 可见，必要时同时校验文档能力。"""
+    database = await knowledge_base.get_accessible_database_info_by_uid(uid, str(kb_id or "").strip())
+    if not database:
         raise HTTPException(status_code=404, detail=f"知识库 {kb_id} 不存在或无权访问")
+    if require_documents and not knowledge_base.database_type_supports_documents(database.get("kb_type")):
+        kb_type = (database.get("kb_type") or "").lower()
+        raise HTTPException(status_code=400, detail=f"{database.get('name') or kb_type} 只支持检索，不支持{operation}")
+    return database
