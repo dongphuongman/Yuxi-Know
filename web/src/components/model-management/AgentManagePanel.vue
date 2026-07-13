@@ -1,14 +1,7 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
 import { message, Modal } from 'ant-design-vue'
-import {
-  Plus,
-  RefreshCw,
-  Trash2,
-  SquarePen,
-  Bot,
-  MessageCirclePlus
-} from 'lucide-vue-next'
+import { Plus, RefreshCw, Trash2, SquarePen, Bot, MessageCirclePlus } from 'lucide-vue-next'
 import { useRouter } from 'vue-router'
 
 import { agentApi } from '@/apis/agent_api'
@@ -290,13 +283,13 @@ defineExpose({
 }
 
 .agent-card :deep(.info-card-tags) {
-  justify-content: flex-end;
+  justify-content: flex-start;
   margin-top: auto;
 }
 
 .agent-card-actions {
   display: flex;
-  justify-content: flex-end;
+  justify-content: flex-start;
   width: 100%;
   margin-top: auto;
 }

@@ -92,9 +92,7 @@
 
               <template #status>
                 <div
-                  v-if="
-                    user.role === 'admin' || user.role === 'superadmin' || user.department_name
-                  "
+                  v-if="user.role === 'admin' || user.role === 'superadmin' || user.department_name"
                   class="role-dept-badge"
                 >
                   <span class="role-icon-wrapper" :class="getRoleClass(user.role)">
