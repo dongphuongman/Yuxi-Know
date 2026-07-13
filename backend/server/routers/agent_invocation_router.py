@@ -29,6 +29,10 @@ class AgentCallRunCreate(BaseModel):
     request_id: str | None = Field(None, description="可选请求幂等 ID，不传则自动生成")
     model_spec: str | None = Field(None, description="可选模型覆盖")
     async_mode: bool = Field(False, description="是否只创建运行并立即返回 run_id")
+    queue_policy: str | None = Field(
+        None,
+        description="排队策略；异步调用默认 enqueue，同步调用固定 reject",
+    )
 
 
 class AgentCallRunResultRequest(BaseModel):
@@ -67,6 +71,7 @@ async def create_agent_call_run(
         request_id=payload.request_id,
         model_spec=payload.model_spec,
         async_mode=payload.async_mode,
+        queue_policy=payload.queue_policy,
         stream=payload.stream,
         current_user=current_user,
         db=db,

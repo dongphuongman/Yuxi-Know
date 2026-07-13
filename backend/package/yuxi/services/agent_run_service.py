@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 import uuid
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
@@ -50,10 +49,14 @@ from yuxi.storage.postgres.models_business import Message, User
 from yuxi.utils.datetime_utils import utc_now_naive
 from yuxi.utils.hash_utils import hash_id
 from yuxi.utils.logging_config import logger
+from yuxi.utils.sse_utils import (
+    SSE_HEARTBEAT_SECONDS,
+    SSE_MAX_CONNECTION_MINUTES,
+    SSE_POLL_INTERVAL_SECONDS,
+    format_heartbeat,
+    format_sse,
+)
 
-SSE_HEARTBEAT_SECONDS = int(os.getenv("RUN_SSE_HEARTBEAT_SECONDS", "15"))  # SSE 连接空闲多久发送心跳
-SSE_MAX_CONNECTION_MINUTES = int(os.getenv("RUN_SSE_MAX_CONNECTION_MINUTES", "30"))  # SSE 连接最大持续时间
-SSE_POLL_INTERVAL_SECONDS = float(os.getenv("RUN_SSE_POLL_INTERVAL_SECONDS", "1.0"))  # SSE 轮询间隔
 RUN_PROGRESS_RECENT_EVENT_SCAN_LIMIT = 100
 RUN_PROGRESS_MESSAGE_LIMIT = 3
 RUN_PROGRESS_CONTENT_MAX_CHARS = 800
@@ -111,18 +114,6 @@ def _build_run_response(run) -> dict:
         "request_id": run.request_id,
         "stream_url": f"/api/agent/runs/{run.id}/events",
     }
-
-
-def _format_sse(data: dict, event: str, event_id: str | None = None) -> str:
-    lines = [f"event: {event}", f"data: {json.dumps(data, ensure_ascii=False)}"]
-    if event_id:
-        lines.append(f"id: {event_id}")
-    lines.append("")
-    return "\n".join(lines) + "\n"
-
-
-def _format_heartbeat() -> str:
-    return ": heartbeat\n\n"
 
 
 def _compact_message_dict(message: dict) -> dict:
@@ -513,6 +504,7 @@ async def create_agent_run_input_message(
     conversation_id: int,
     request_id: str,
     input_message: AgentRunInputMessage,
+    delivery_status: str = "complete",
 ) -> Message:
     """先落库输入消息；run 创建后再回填 run_id，避免 Message 外键先指向不存在的 run。"""
     message = Message(
@@ -522,7 +514,7 @@ async def create_agent_run_input_message(
         message_type=input_message.message_type,
         image_content=input_message.image_content,
         request_id=request_id,
-        delivery_status="complete",
+        delivery_status=delivery_status,
         extra_metadata=input_message.extra_metadata,
     )
     db.add(message)
@@ -822,13 +814,13 @@ async def stream_agent_run_events(
                     repo = AgentRunRepository(db)
                     run = await repo.get_run_for_user(run_id, str(current_uid))
                     if not run:
-                        yield _format_sse({"run_id": run_id, "message": "运行任务不存在"}, event="error")
+                        yield format_sse({"run_id": run_id, "message": "运行任务不存在"}, event="error")
                         return
             except asyncio.CancelledError:
                 raise
             except Exception as e:
                 logger.warning(f"Run SSE DB error for run {run_id}: {e}")
-                yield _format_sse(
+                yield format_sse(
                     {
                         "run_id": run_id,
                         "message": "运行事件流暂时不可用，请重连",
@@ -842,7 +834,7 @@ async def stream_agent_run_events(
                 events = await list_run_stream_events(run_id, after_seq=last_seq, limit=200)
             except Exception as e:
                 logger.warning(f"Run SSE redis error for run {run_id}: {e}")
-                yield _format_sse(
+                yield format_sse(
                     {
                         "run_id": run_id,
                         "message": "运行事件流暂时不可用，请重连",
@@ -862,7 +854,7 @@ async def stream_agent_run_events(
                     envelope = _compact_run_event_envelope(envelope)
                     if envelope is None:
                         continue
-                yield _format_sse(envelope, event=event_type, event_id=seq)
+                yield format_sse(envelope, event=event_type, event_id=seq)
                 if event_type == "end":
                     emitted_terminal = True
 
@@ -884,7 +876,7 @@ async def stream_agent_run_events(
                 )
                 if not verbose:
                     terminal_envelope = _compact_run_event_envelope(terminal_envelope)
-                yield _format_sse(
+                yield format_sse(
                     terminal_envelope,
                     event="end",
                     event_id=terminal_seq,
@@ -895,7 +887,7 @@ async def stream_agent_run_events(
             elapsed_seconds = (now - started_at).total_seconds()
             heartbeat_elapsed = (now - last_heartbeat_ts).total_seconds()
             if heartbeat_elapsed >= SSE_HEARTBEAT_SECONDS:
-                yield _format_heartbeat()
+                yield format_heartbeat()
                 last_heartbeat_ts = now
 
             if elapsed_seconds >= SSE_MAX_CONNECTION_MINUTES * 60:

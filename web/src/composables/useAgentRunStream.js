@@ -192,7 +192,10 @@ export function useAgentRunStream({
     ts.replyLoadingVisible = false
     ts.pendingRequestId = null
     fetchThreadMessages({ agentId: unref(currentAgentId), threadId, delay }).finally(() => {
-      resetOnGoingConv(threadId)
+      const latest = getThreadState(threadId)
+      if (!latest?.activeRunId || latest.activeRunId === runId) {
+        resetOnGoingConv(threadId)
+      }
       fetchAgentState(unref(currentAgentId), threadId)
       if (scroll) onScrollToBottom()
       if (isInterrupted) {

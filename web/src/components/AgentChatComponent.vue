@@ -143,9 +143,41 @@
                 <h1>{{ randomGreeting }}</h1>
               </div>
 
+              <section
+                v-if="currentQueuedRequests.length"
+                class="queued-request-panel"
+                aria-label="排队请求"
+              >
+                <div class="queued-request-title">要求后续变更</div>
+                <div class="queued-request-list">
+                  <div
+                    v-for="request in currentQueuedRequests"
+                    :key="request.request_id"
+                    class="queued-request-row"
+                  >
+                    <CornerDownRight :size="16" class="queued-request-icon" aria-hidden="true" />
+                    <span class="queued-request-content" :title="request.content || '排队请求'">
+                      {{ request.content || '排队请求' }}
+                    </span>
+                    <span class="queued-request-position">
+                      排队 {{ request.queue_position || request.position || 1 }}
+                    </span>
+                    <button
+                      type="button"
+                      class="queued-request-delete lucide-icon-btn"
+                      :disabled="cancellingRequestIds.has(request.request_id)"
+                      :aria-label="`删除排队请求：${request.content || '排队请求'}`"
+                      @click="handleCancelQueuedRequest(request.request_id)"
+                    >
+                      <Trash2 :size="16" />
+                    </button>
+                  </div>
+                </div>
+              </section>
+
               <AgentInputArea
                 v-model="userInput"
-                :is-loading="isProcessing"
+                :is-loading="shouldShowStopButton"
                 :disabled="!currentAgent"
                 :send-button-disabled="isSendButtonDisabled"
                 :mention="mentionConfig"
@@ -576,7 +608,14 @@ import {
   onDeactivated
 } from 'vue'
 import { message } from 'ant-design-vue'
-import { ChevronDown, FolderKanban, LayoutList, RefreshCw } from 'lucide-vue-next'
+import {
+  ChevronDown,
+  CornerDownRight,
+  FolderKanban,
+  LayoutList,
+  RefreshCw,
+  Trash2
+} from 'lucide-vue-next'
 import { formatFileSize } from '@/utils/file_utils'
 import FileTypeIcon from '@/components/common/FileTypeIcon.vue'
 import { generatePixelAvatar } from '@/utils/pixelAvatar'
@@ -608,6 +647,7 @@ import { useAgentThreadState } from '@/composables/useAgentThreadState'
 import { useAgentRunStream } from '@/composables/useAgentRunStream'
 import { useAgentStreamHandler } from '@/composables/useAgentStreamHandler'
 import { useStreamSmoother } from '@/composables/useStreamSmoother'
+import { useAgentRequestQueue } from '@/composables/useAgentRequestQueue'
 import { useAgentMentionConfig } from '@/composables/useAgentMentionConfig'
 import AgentArtifactsCard from '@/components/AgentArtifactsCard.vue'
 import AgentPanel from '@/components/AgentPanel.vue'
@@ -638,6 +678,7 @@ const { threads, currentThreadId, currentThread } = storeToRefs(chatThreadsStore
 // ==================== LOCAL CHAT & UI STATE ====================
 const userInput = ref('')
 const sendCooldownActive = ref(false)
+const cancellingRequestIds = reactive(new Set())
 let sendCooldownTimer = null
 // 预设的打招呼文本
 const greetingMessages = [
@@ -1765,22 +1806,32 @@ const isStreaming = computed(() => {
   const threadState = currentThreadState.value
   return threadState ? threadState.isStreaming : false
 })
+const currentQueuedRequests = computed(() => currentThreadState.value?.queuedRequests || [])
+const queuedRequestCount = computed(() => currentQueuedRequests.value.length)
+const hasQueuedRequests = computed(() => queuedRequestCount.value > 0)
+const shouldShowStopButton = computed(
+  () => isStreaming.value && !String(userInput.value || '').trim()
+)
 const shouldRefreshStateWhileStreaming = computed(
   () => Boolean(currentChatId.value) && isStreaming.value && statePanelOpen.value
 )
-const isProcessing = computed(() => isStreaming.value)
+const isProcessing = computed(() => isStreaming.value || hasQueuedRequests.value)
 const isReplyLoading = computed(() => {
   const threadState = currentThreadState.value
   return Boolean(threadState?.replyLoadingVisible)
 })
-const replyLoadingText = computed(() =>
-  currentThreadState.value?.contextCompressing ? '正在压缩上下文...' : '正在生成回复...'
-)
+const replyLoadingText = computed(() => {
+  const threadState = currentThreadState.value
+  if (threadState?.contextCompressing) return '正在压缩上下文...'
+  if (hasQueuedRequests.value) return `排队中（${queuedRequestCount.value} 条）...`
+  return '正在生成回复...'
+})
 const isSendButtonDisabled = computed(() => {
   return (
     sendCooldownActive.value ||
-    (props.sendDisabled && !isProcessing.value) ||
-    ((!userInput.value || !currentAgent.value) && !isProcessing.value)
+    props.sendDisabled ||
+    (!userInput.value && !isProcessing.value) ||
+    !currentAgent.value
   )
 })
 
@@ -2314,8 +2365,52 @@ const { startRunStream, resumeActiveRunForThread, stopRunStreamSubscription } = 
     if (approvalState.threadId === threadId || touchedThreadIds.includes(approvalState.threadId)) {
       hideApprovalState()
     }
+    void resumeQueuedRequestsForThread(threadId)
   }
 })
+const startDispatchedRequestRun = async (threadId, runId, requestId) => {
+  await fetchThreadMessages({ agentId: currentAgentId.value, threadId })
+  resetOnGoingConv(threadId, { preserveRequestStreams: true })
+  const onGoingConv = getThreadState(threadId)?.onGoingConv
+  if (onGoingConv) {
+    onGoingConv.currentRequestKey = requestId
+    onGoingConv.currentAssistantKey = null
+  }
+  await startRunStream(threadId, runId, '0-0')
+}
+
+const { startRequestStream, stopAllRequestStreams, cancelRequest, syncQueuedRequests } =
+  useAgentRequestQueue({
+    getThreadState,
+    startRunStream: startDispatchedRequestRun,
+    onStreamError: () => {}
+  })
+
+const handleCancelQueuedRequest = async (requestId) => {
+  const threadId = currentChatId.value
+  if (!threadId || !requestId || cancellingRequestIds.has(requestId)) return
+
+  cancellingRequestIds.add(requestId)
+  const cancelled = await cancelRequest(threadId, requestId)
+  cancellingRequestIds.delete(requestId)
+  if (cancelled) {
+    await resumeQueuedRequestsForThread(threadId)
+    message.success('已删除排队请求')
+  }
+}
+
+const resumeQueuedRequestsForThread = async (threadId) => {
+  const ts = getThreadState(threadId)
+  if (!ts) return
+  const agentSlug = threads.value.find((t) => t.id === threadId)?.agent_id || currentAgentId.value
+  if (!agentSlug) return
+  await syncQueuedRequests(threadId, agentSlug)
+  if (ts.queuedRequests && ts.queuedRequests.length > 0) {
+    for (const req of ts.queuedRequests) {
+      void startRequestStream(threadId, req.request_id)
+    }
+  }
+}
 
 const resumeCurrentRunForVisiblePage = async () => {
   if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return
@@ -2324,6 +2419,7 @@ const resumeCurrentRunForVisiblePage = async () => {
 
   try {
     await resumeActiveRunForThread(threadId)
+    await resumeQueuedRequestsForThread(threadId)
     restorePendingInterruptForThread(threadId)
   } catch (error) {
     console.warn('Failed to resume current run after page became visible:', error)
@@ -2358,8 +2454,8 @@ const selectChat = async (chatId) => {
   // 中断之前线程的流式输出（如果存在）
   if (previousThreadId && previousThreadId !== chatId) {
     stopThreadStream(previousThreadId)
-    // run 模式下仅断开 SSE 订阅，不取消后台运行任务
     stopRunStreamSubscription(previousThreadId)
+    stopAllRequestStreams(previousThreadId)
   }
 
   if (previousThreadId !== chatId) {
@@ -2402,6 +2498,7 @@ const selectChat = async (chatId) => {
   await handleAgentStateRefresh(chatId)
   syncThreadConfigSnapshot(chatId, { overwrite: false })
   await resumeActiveRunForThread(chatId)
+  await resumeQueuedRequestsForThread(chatId)
   restorePendingInterruptForThread(chatId)
   await scrollController.scrollToBottomStaticForce()
 }
@@ -2416,6 +2513,7 @@ const selectThreadFromRoute = async (threadId) => {
     if (previousThreadId) {
       stopThreadStream(previousThreadId)
       stopRunStreamSubscription(previousThreadId)
+      stopAllRequestStreams(previousThreadId)
     }
     resetAgentPanelState()
     setCurrentThreadId(null)
@@ -2442,13 +2540,7 @@ const selectThreadFromRoute = async (threadId) => {
 const handleSendMessage = async ({ image } = {}) => {
   const text = userInput.value.trim()
   const imageContent = image?.imageContent || null
-  if (
-    (!text && !image) ||
-    !currentAgent.value ||
-    isProcessing.value ||
-    sendCooldownActive.value ||
-    props.sendDisabled
-  )
+  if ((!text && !image) || !currentAgent.value || sendCooldownActive.value || props.sendDisabled)
     return
 
   // 发送后进入短暂冷却，防止连续触发停止
@@ -2480,6 +2572,7 @@ const handleSendMessage = async ({ image } = {}) => {
 
   const threadState = getThreadState(threadId)
   if (!threadState) return
+  const hadActiveRun = Boolean(threadState.activeRunId && threadState.isStreaming)
   threadState.pendingInterrupt = null
   if (approvalState.threadId === threadId) {
     hideApprovalState()
@@ -2513,19 +2606,21 @@ const handleSendMessage = async ({ image } = {}) => {
     }
   }
 
-  resetOnGoingConv(threadId)
   const requestId = createClientRequestId()
   const previousAttachments = markAttachmentsRequestId(threadId, pendingAttachments, requestId)
-  insertOptimisticHumanMessage(threadState, {
-    requestId,
-    text,
-    imageContent,
-    attachments: pendingAttachments.map((attachment) => ({
-      ...attachment,
-      request_id: requestId
-    }))
-  })
-  threadState.isStreaming = true
+  if (!hadActiveRun) {
+    resetOnGoingConv(threadId)
+    insertOptimisticHumanMessage(threadState, {
+      requestId,
+      text,
+      imageContent,
+      attachments: pendingAttachments.map((attachment) => ({
+        ...attachment,
+        request_id: requestId
+      }))
+    })
+    threadState.isStreaming = true
+  }
 
   try {
     const runResp = await agentApi.createAgentRun({
@@ -2539,17 +2634,35 @@ const handleSendMessage = async ({ image } = {}) => {
       image_content: imageContent,
       model_spec: modelSpec
     })
+    const status = runResp?.status
     const runId = runResp?.run_id
-    if (!runId) {
+    if (status === 'queued' || (!runId && status !== 'rejected')) {
+      threadState.queuedRequests = threadState.queuedRequests || []
+      threadState.queuedRequests.push({
+        request_id: requestId,
+        status: 'queued',
+        queue_position: runResp?.queue_position || 1,
+        content: text
+      })
+      if (!hadActiveRun) {
+        threadState.isStreaming = false
+        threadState.replyLoadingVisible = false
+      }
+      await resumeQueuedRequestsForThread(threadId)
+    } else if (runId) {
+      threadState.pendingRequestId = requestId
+      await startRunStream(threadId, runId, 0)
+    } else {
       throw new Error('创建 run 失败：缺少 run_id')
     }
-    await startRunStream(threadId, runId, 0)
   } catch (error) {
-    threadState.isStreaming = false
-    threadState.replyLoadingVisible = false
-    threadState.pendingRequestId = null
+    if (!hadActiveRun) {
+      threadState.isStreaming = false
+      threadState.replyLoadingVisible = false
+      threadState.pendingRequestId = null
+      resetOnGoingConv(threadId)
+    }
     rollbackAttachments(threadId, previousAttachments)
-    resetOnGoingConv(threadId)
     handleChatError(error, 'send')
   }
 }
@@ -2562,7 +2675,8 @@ const handleSendOrStop = async (payload) => {
 
   const threadId = currentChatId.value
   const threadState = getThreadState(threadId)
-  if (isProcessing.value && threadState?.activeRunId) {
+  const hasNewInput = Boolean(String(userInput.value || '').trim() || payload?.image)
+  if (threadState?.activeRunId && threadState?.isStreaming && !hasNewInput) {
     try {
       await agentApi.cancelAgentRun(threadState.activeRunId)
       threadState.pendingInterrupt = null
@@ -2575,7 +2689,6 @@ const handleSendOrStop = async (payload) => {
     }
     return
   }
-  if (props.sendDisabled) return
   await handleSendMessage(payload)
 }
 
@@ -3359,6 +3472,91 @@ watch(currentChatId, (threadId, oldThreadId) => {
     width: 100%;
     max-width: 800px;
     margin: 0 auto;
+
+    .queued-request-panel {
+      margin-bottom: 8px;
+      padding: 14px 16px 10px;
+      background: var(--gray-0);
+      border: 1px solid var(--gray-150);
+      border-radius: 12px;
+    }
+
+    .queued-request-title {
+      margin-bottom: 6px;
+      color: var(--color-text-tertiary);
+      font-size: 12px;
+      font-weight: 500;
+    }
+
+    .queued-request-list {
+      display: flex;
+      flex-direction: column;
+    }
+
+    .queued-request-row {
+      min-height: 40px;
+      display: grid;
+      grid-template-columns: 18px minmax(0, 1fr) auto 32px;
+      gap: 8px;
+      align-items: center;
+      color: var(--color-text);
+
+      & + .queued-request-row {
+        border-top: 1px solid var(--gray-100);
+      }
+    }
+
+    .queued-request-icon {
+      color: var(--gray-400);
+    }
+
+    .queued-request-content {
+      min-width: 0;
+      overflow: hidden;
+      font-size: 14px;
+      font-weight: 500;
+      line-height: 1.5;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .queued-request-position {
+      color: var(--color-text-tertiary);
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    .queued-request-delete {
+      width: 32px;
+      height: 32px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0;
+      color: var(--gray-400);
+      background: transparent;
+      border: 0;
+      border-radius: 6px;
+      cursor: pointer;
+      transition:
+        color 0.18s ease,
+        background-color 0.18s ease;
+
+      &:hover:not(:disabled) {
+        color: var(--color-error-700);
+        background: var(--color-error-50);
+      }
+
+      &:focus-visible {
+        outline: 2px solid var(--main-color);
+        outline-offset: 1px;
+      }
+
+      &:disabled {
+        color: var(--gray-300);
+        cursor: wait;
+      }
+    }
 
     .bottom-actions {
       display: flex;

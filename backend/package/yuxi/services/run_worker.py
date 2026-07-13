@@ -7,12 +7,17 @@ import json
 import time
 from dataclasses import dataclass, field
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.exc import OperationalError
 from yuxi.agents.mcp.service import ensure_builtin_mcp_servers_in_db
 from yuxi.agents.skills.service import init_builtin_skills
 from yuxi.config import config as sys_config
 from yuxi.repositories.agent_run_repository import TERMINAL_RUN_STATUSES, AgentRunRepository
+from yuxi.services.agent_request_queue_service import (
+    RUN_STATUS_TO_DELIVERY_STATUS,
+    dispatch_next_request,
+    recover_pending_dispatches,
+)
 from yuxi.services.chat_service import stream_agent_chat, stream_agent_resume
 from yuxi.services.input_message_service import restore_chat_input_message
 from yuxi.services.run_queue_service import (
@@ -145,9 +150,14 @@ async def mark_run_running(run_id: str):
 
 
 async def mark_run_terminal(run_id: str, status: str, error_type: str | None = None, error_message: str | None = None):
+    delivery_status = RUN_STATUS_TO_DELIVERY_STATUS.get(status)
     async with pg_manager.get_async_session_context() as db:
         repo = AgentRunRepository(db)
-        await repo.set_terminal_status(run_id, status=status, error_type=error_type, error_message=error_message)
+        run = await repo.set_terminal_status(run_id, status=status, error_type=error_type, error_message=error_message)
+        if run and run.input_message_id and delivery_status:
+            await db.execute(
+                update(Message).where(Message.id == run.input_message_id).values(delivery_status=delivery_status)
+            )
 
 
 async def _load_user(uid: str):
@@ -536,6 +546,14 @@ async def process_agent_run(ctx, run_id: str):
     finally:
         await run_ctx.close()
         await clear_cancel_signal(run_id)
+        # completed 后尝试派发线程的下一个排队请求
+        final_run = await _get_run(run_id)
+        if final_run and final_run.status == "completed":
+            await dispatch_next_request(
+                uid=uid,
+                agent_slug=agent_slug,
+                thread_id=thread_id,
+            )
 
 
 async def _load_input_message(message_id: int | None) -> Message | None:
@@ -556,6 +574,7 @@ async def _worker_startup(ctx):
     async with pg_manager.get_async_session_context() as session:
         await init_builtin_skills(session)
     sys_config.start_runtime_sync()
+    await recover_pending_dispatches()
 
 
 async def _worker_shutdown(ctx):

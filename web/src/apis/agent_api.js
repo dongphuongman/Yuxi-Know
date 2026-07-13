@@ -107,8 +107,40 @@ export const agentApi = {
       image_content: data.image_content || null,
       model_spec: data.model_spec || null,
       resume: data.resume ?? null,
-      created_by_run_id: data.created_by_run_id || null
+      created_by_run_id: data.created_by_run_id || null,
+      queue_policy: data.queue_policy || 'enqueue'
     }),
+
+  /**
+   * 获取请求详情
+   */
+  getRequest: (requestId) => apiGet(`/api/agent/requests/${requestId}`),
+
+  /**
+   * 列出线程内 queued 请求
+   */
+  listThreadQueuedRequests: (threadId, agentSlug) => {
+    const params = new URLSearchParams({ agent_slug: agentSlug })
+    return apiGet(`/api/agent/thread/${threadId}/requests?${params.toString()}`)
+  },
+
+  /**
+   * 取消排队中的请求
+   */
+  cancelRequest: (requestId) => apiPost(`/api/agent/requests/${requestId}/cancel`, {}),
+
+  /**
+   * 打开 Request 事件 SSE 连接（调用方负责关闭）
+   */
+  streamRequestEvents: (requestId, options = {}) => {
+    const { signal } = options
+    const headers = { ...useUserStore().getAuthHeaders() }
+    return fetch(`/api/agent/requests/${requestId}/events`, {
+      method: 'GET',
+      headers,
+      signal
+    })
+  },
 
   /**
    * 获取 Run 状态

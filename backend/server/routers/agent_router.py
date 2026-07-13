@@ -1,13 +1,12 @@
 from __future__ import annotations
 
+import uuid
 from typing import Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
-
-from server.utils.auth_middleware import get_admin_user, get_db, get_required_user
 from yuxi.agents.buildin import agent_manager
 from yuxi.agents.context import filter_config_by_role
 from yuxi.repositories.agent_repository import (
@@ -15,6 +14,14 @@ from yuxi.repositories.agent_repository import (
     is_builtin_agent,
     user_can_access_agent,
     user_can_manage_agent,
+)
+from yuxi.services.agent_request_queue_service import (
+    cancel_queued_request as cancel_queued_request_svc,
+    finalize_intake,
+    get_request as get_request_svc,
+    intake_request,
+    list_queued_requests,
+    stream_request_events,
 )
 from yuxi.services.agent_run_service import (
     cancel_agent_run_view,
@@ -25,7 +32,10 @@ from yuxi.services.agent_run_service import (
     stream_agent_run_events,
 )
 from yuxi.services.input_message_service import build_chat_input_message
+from yuxi.storage.postgres.manager import pg_manager
 from yuxi.storage.postgres.models_business import User
+
+from server.utils.auth_middleware import get_admin_user, get_db, get_required_user
 
 agent_router = APIRouter(prefix="/agent", tags=["agent"])
 
@@ -62,6 +72,7 @@ class AgentRunCreate(BaseModel):
     model_spec: str | None = Field(None, description="可选，对话级模型覆盖，优先级高于智能体配置")
     resume: Any | None = Field(None, description="可选，恢复时传给 LangGraph 的输入载荷，非布尔值")
     created_by_run_id: str | None = Field(None, description="可选，创建本 run 的父 run ID；resume 时为被恢复的 run ID")
+    queue_policy: str = Field("enqueue", description="排队策略：enqueue（默认排队）或 reject（运行中拒绝）")
 
 
 def _backend_info(info: dict) -> dict:
@@ -258,19 +269,116 @@ async def create_agent_run(
     current_user: User = Depends(get_required_user),
     db: AsyncSession = Depends(get_db),
 ):
-    input_message = None
-    if payload.resume is None and payload.query:
-        input_message = build_chat_input_message(payload.query, payload.image_content)
-    return await create_agent_run_view(
-        input_message=input_message,
+    # resume 路径：恢复已有 LangGraph 状态，跳过 request 入队与派发，直接新建 run。
+    if payload.resume is not None:
+        input_message = None
+        if payload.query:
+            input_message = build_chat_input_message(payload.query, payload.image_content)
+        return await create_agent_run_view(
+            input_message=input_message,
+            agent_slug=payload.agent_slug,
+            thread_id=payload.thread_id,
+            meta=dict(payload.meta or {}),
+            model_spec=payload.model_spec,
+            current_uid=str(current_user.uid),
+            db=db,
+            resume=payload.resume,
+            created_by_run_id=payload.created_by_run_id,
+        )
+
+    # 普通 chat 路径：写入 request + message，立即派发或入队等待。
+    meta = dict(payload.meta or {})
+    request_id = meta.get("request_id") or str(uuid.uuid4())
+    meta["request_id"] = request_id
+
+    input_message = build_chat_input_message(payload.query or "", payload.image_content)
+
+    agent_repo = AgentRepository(db)
+    agent_item = await agent_repo.get_visible_by_slug(slug=payload.agent_slug, user=current_user, kind="main")
+    if not agent_item:
+        raise HTTPException(status_code=404, detail="智能体不存在")
+    agent_backend = agent_manager.get_agent(agent_item.backend_id)
+    if not agent_backend:
+        raise HTTPException(status_code=404, detail=f"智能体后端 {agent_item.backend_id} 不存在")
+
+    result = await intake_request(
+        db=db,
+        request_id=request_id,
+        uid=str(current_user.uid),
         agent_slug=payload.agent_slug,
         thread_id=payload.thread_id,
-        meta=dict(payload.meta or {}),
+        source="chat",
+        queue_policy=payload.queue_policy,
+        input_message=input_message,
+        agent_item=agent_item,
+        agent_backend=agent_backend,
         model_spec=payload.model_spec,
-        current_uid=str(current_user.uid),
-        db=db,
-        resume=payload.resume,
-        created_by_run_id=payload.created_by_run_id,
+    )
+
+    await finalize_intake(db=db, intake=result)
+
+    return {
+        "request_id": result.request_id,
+        "status": result.status,
+        "queue_policy": result.queue_policy,
+        "queue_position": result.queue_position,
+        "message_id": result.message_id,
+        "run_id": result.run_id,
+        "stream_url": f"/api/agent/runs/{result.run_id}/events" if result.run_id else None,
+        "request_events_url": (
+            f"/api/agent/requests/{result.request_id}/events" if result.status == "queued" else None
+        ),
+        "thread_id": payload.thread_id,
+    }
+
+
+@agent_router.get("/requests/{request_id}")
+async def get_request(
+    request_id: str,
+    current_user: User = Depends(get_required_user),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await get_request_svc(db=db, request_id=request_id, uid=str(current_user.uid))
+    if not result:
+        raise HTTPException(status_code=404, detail="请求不存在")
+    return {"request": result}
+
+
+@agent_router.get("/thread/{thread_id}/requests")
+async def list_thread_requests(
+    thread_id: str,
+    current_user: User = Depends(get_required_user),
+    agent_slug: str = Query(..., description="智能体 slug"),
+    db: AsyncSession = Depends(get_db),
+):
+    requests = await list_queued_requests(db=db, uid=str(current_user.uid), agent_slug=agent_slug, thread_id=thread_id)
+    return {"requests": requests}
+
+
+@agent_router.post("/requests/{request_id}/cancel")
+async def cancel_request(
+    request_id: str,
+    current_user: User = Depends(get_required_user),
+    db: AsyncSession = Depends(get_db),
+):
+    status = await cancel_queued_request_svc(request_id=request_id, current_uid=str(current_user.uid), db=db)
+    await db.commit()
+    return {"request_id": request_id, "status": status}
+
+
+@agent_router.get("/requests/{request_id}/events")
+async def stream_request_events_route(
+    request_id: str,
+    current_user: User = Depends(get_required_user),
+):
+    return StreamingResponse(
+        stream_request_events(
+            request_id=request_id,
+            uid=str(current_user.uid),
+            db_session_factory=pg_manager.get_async_session_context,
+        ),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
     )
 
 
