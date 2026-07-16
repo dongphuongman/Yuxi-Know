@@ -6,6 +6,10 @@
 
 ## v0.7.1 (current)
 
+### 安全
+
+- 生产 Compose 不再回退到公开的 Neo4j、MinIO 和 PostgreSQL 默认凭证，并要求显式配置 JWT 随机密钥与实例标识；相关配置缺失时会在解析阶段拒绝启动并提示具体变量名。管理员初始化、创建用户、创建部门管理员及修改用户密码在前后端统一要求密码不少于 8 位。
+
 ### 破坏性变更
 
 - API Key 收紧到具体用户：`api_keys.user_id` 收紧为非空，启动 schema 演进会先清理 `cli_auth_sessions` 中对未绑定 API Key 的引用，再 `DELETE FROM api_keys WHERE user_id IS NULL`，最后 `ALTER COLUMN user_id SET NOT NULL`。**升级前请在 0.7.0 库执行 `SELECT id, name, department_id FROM api_keys WHERE user_id IS NULL;`**，决定每个未绑定 Key 的归属用户并手动 `UPDATE`，未绑定的 Key 升级后会被静默删除且无法恢复；清理前后端日志会输出 `Schema migration will delete N unbound API key(s)` 告警以便回溯。
