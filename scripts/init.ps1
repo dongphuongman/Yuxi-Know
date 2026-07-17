@@ -43,6 +43,26 @@ YUXI_INSTANCE_ID=$YUXI_INSTANCE_ID
 "@ | Add-Content -Path ".env" -Encoding UTF8
 }
 
+function Ensure-SandboxEnv {
+    if (Test-EnvValue "SANDBOX_PROVISIONER_TOKEN") {
+        return
+    }
+
+    $SANDBOX_PROVISIONER_TOKEN = New-RandomHex 32
+    if (Select-String -Path ".env" -Pattern "^SANDBOX_PROVISIONER_TOKEN=" -Quiet) {
+        $envContent = Get-Content -Path ".env" -Raw
+        $envContent = $envContent -replace "(?m)^SANDBOX_PROVISIONER_TOKEN=.*$", "SANDBOX_PROVISIONER_TOKEN=$SANDBOX_PROVISIONER_TOKEN"
+        Set-Content -Path ".env" -Value $envContent -NoNewline -Encoding UTF8
+    } else {
+        @"
+
+# Sandbox provisioner authentication
+SANDBOX_PROVISIONER_TOKEN=$SANDBOX_PROVISIONER_TOKEN
+"@ | Add-Content -Path ".env" -Encoding UTF8
+    }
+    Write-Host "Generated SANDBOX_PROVISIONER_TOKEN and saved it to .env." -ForegroundColor Green
+}
+
 Write-Host "🚀 Initializing Yuxi project..." -ForegroundColor Cyan
 Write-Host "==================================" -ForegroundColor Cyan
 
@@ -50,6 +70,7 @@ Write-Host "==================================" -ForegroundColor Cyan
 if (Test-Path ".env") {
     Write-Host "✅ .env file already exists. Skipping environment setup." -ForegroundColor Green
     Ensure-JwtEnv
+    Ensure-SandboxEnv
 } else {
     Write-Host "📝 .env file not found. Let's set up your environment variables." -ForegroundColor Yellow
     Write-Host ""
@@ -105,6 +126,7 @@ SILICONFLOW_API_KEY=$apiKey
 # JWT security settings
 JWT_SECRET_KEY=$JWT_SECRET_KEY
 YUXI_INSTANCE_ID=$YUXI_INSTANCE_ID
+SANDBOX_PROVISIONER_TOKEN=$(New-RandomHex 32)
 "@
 
     $envContent | Out-File -FilePath ".env" -Encoding UTF8
